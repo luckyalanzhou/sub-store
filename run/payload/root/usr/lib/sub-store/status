@@ -1,0 +1,44 @@
+#!/usr/bin/lua
+local sys = require "luci.sys"
+local json = require "luci.jsonc"
+local function read(path)
+    local f = io.open(path, "r")
+    if not f then return "" end
+    local value = f:read("*a") or ""
+    f:close()
+    return value:gsub("%s+$", "")
+end
+local function command(value)
+    return (sys.exec("( " .. value .. " ) 2>/dev/null") or ""):gsub("%s+$", "")
+end
+local state = "/tmp/sub-store-operation/"
+local mode = arg[1] or "summary"
+local busy = sys.call("test -d /tmp/sub-store-operation/lock") == 0
+local result = {
+    container = busy and "maintenance" or command("/usr/bin/sub-storectl status"),
+    version = read("/etc/sub-store/version"),
+    phase = read(state .. "phase"),
+    action = read(state .. "action"),
+    operation = read(state .. "status"),
+    busy = busy
+}
+-- Docker CLI calls can stall while dockerd pulls or replaces an image. Keep
+-- polling cheap during maintenance; the next poll reads full details again.
+if not busy and result.container == "running" then
+    result.health = command("/usr/bin/sub-storectl health")
+end
+if mode == "logs" or mode == "details" then
+    result.output = command("tail -n 100 /tmp/sub-store-operation/output.log")
+    if not busy then
+        result.container_log = command("docker logs --tail 100 sub-store 2>&1")
+    end
+end
+if mode == "details" and not busy then
+    result.url = command("/usr/bin/sub-storectl url")
+    result.api_url = command("/usr/bin/sub-storectl api-url")
+    result.storage = command("/usr/bin/sub-storectl storage")
+    result.image = command("docker inspect -f '{{.Config.Image}} / {{.Image}}' sub-store")
+    result.created = command("docker inspect -f '{{.Created}}' sub-store")
+    result.app_version = command("/usr/bin/sub-storectl app-version")
+end
+io.write(json.stringify(result), "\n")

@@ -1,0 +1,10 @@
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+dist/
+*.run
+*.tar.gz
+*.ipk
+*.tmp

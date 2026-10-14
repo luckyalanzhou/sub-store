@@ -1,0 +1,324 @@
+'use strict';
+'require view';
+'require form';
+'require uci';
+'require rpc';
+'require fs';
+'require ui';
+'require poll';
+
+const commit = rpc.declare({ object: 'uci', method: 'commit', params: ['config'], expect: { '': 0 } });
+const names = { running: '运行中', exited: '已停止', stopped: '已停止', restarting: '正在重启',
+    maintenance: '正在维护', 'docker-unavailable': 'Docker 不可用', 'not-created': '容器尚未创建' };
+function validCron(value) {
+    const fields = value.trim().split(/\s+/);
+    const limits = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+    return fields.length === 5 && fields.every((field, i) => field.split(',').every(item => {
+        const parts = item.split('/');
+        if (parts.length > 2 || (parts.length === 2 && (!/^\d+$/.test(parts[1]) || +parts[1] < 1))) return false;
+        if (parts[0] === '*') return true;
+        const range = parts[0].split('-');
+        return range.length <= 2 && range.every(n => /^\d+$/.test(n) && +n >= limits[i][0] && +n <= limits[i][1]) &&
+            (range.length === 1 || +range[0] <= +range[1]);
+    }));
+}
+
+return view.extend({
+    validCron: validCron,
+    snapshot: async function(mode) {
+        const r = await fs.exec('/usr/lib/sub-store/status', mode && mode !== 'summary' ? [mode] : []);
+        if (r.code !== 0) throw new Error(r.stderr || '读取服务状态失败');
+        return JSON.parse(r.stdout);
+    },
+    load: function() {
+        return Promise.all([uci.load('sub-store'), this.snapshot('details')]);
+    },
+    setBusy: function(busy) {
+        this.localBusy = busy;
+        const disabled = busy || !!(this.state && this.state.busy);
+        this.buttons.forEach(button => { button.disabled = disabled; });
+        if (this.clearLogsButton) this.clearLogsButton.disabled = disabled || this.activeLog === 'container';
+        if (this.map && this.map.root && this.map.root.querySelectorAll)
+            this.map.root.querySelectorAll('input,select,textarea').forEach(input => { input.disabled = disabled; });
+    },
+    refresh: async function(mode) {
+        try {
+            const wasBusy = !!(this.state && this.state.busy);
+            let s = await this.snapshot(mode || 'summary');
+            if ((mode || 'summary') === 'summary' && (wasBusy || this.awaitingTaskDetails) && !s.busy && s.phase !== 'running') {
+                s = Object.assign(s, await this.snapshot('details'));
+                this.awaitingTaskDetails = false;
+            }
+            this.state = Object.assign(this.state || {}, s);
+            this.paint();
+            if (this.reloadAfterTask && !s.busy && s.phase !== 'running') {
+                this.reloadAfterTask = false;
+                uci.unload('sub-store');
+                await uci.load('sub-store');
+                await this.map.load();
+                await this.map.reset();
+            }
+        } catch (error) {
+            this.status.textContent = '状态读取失败：' + error.message;
+            this.status.className = 'alert-message warning';
+        }
+    },
+    paint: function() {
+        const s = this.state;
+        const unhealthy = s.container === 'running' && s.health === 'unhealthy';
+        const starting = s.container === 'running' && s.health === 'starting';
+        this.status.textContent = unhealthy ? 'sub-store 服务运行异常' : starting ? 'sub-store 服务正在启动检查' :
+            s.container === 'running' ? 'sub-store 服务已启动' :
+                'sub-store 服务状态：' + (names[s.container] || s.container || '状态未知');
+        this.status.className = s.container === 'running' && !unhealthy ? 'sub-store-status is-running' : 'sub-store-status is-warning';
+        this.version.textContent = '插件版本：' + (s.version || '未知');
+        this.address.value = s.url || '';
+        this.open.href = s.url || '#';
+        this.open.hidden = !s.url || s.container !== 'running';
+        this.operation.textContent = '最近操作：' + (s.operation || '尚无维护操作');
+        this.storage.textContent = s.storage || '实际路径暂不可用';
+        this.image.textContent = s.image || '容器镜像未就绪';
+        this.appVersion.textContent = s.app_version || '暂未读取到版本';
+        this.created.textContent = s.created || '容器尚未创建';
+        this.api.value = s.api_url || '';
+        this.paintLog();
+        this.updateLogControls();
+        this.setBusy(!!this.localBusy);
+    },
+    selectLog: function(name) {
+        this.activeLog = name;
+        this.followLog = true;
+        this.paintLog();
+        this.updateLogControls();
+    },
+    updateLogControls: function() {
+        if (!this.clearLogsButton) return;
+        this.clearLogsButton.hidden = this.activeLog === 'container';
+        this.clearLogsButton.disabled = !!this.localBusy || !!(this.state && this.state.busy);
+        this.logHint.textContent = '最多保留 512 KiB，超出部分自动清理。';
+    },
+    paintLog: function() {
+        if (!this.logBox || !this.state) return;
+        const logs = {
+            operation: this.state.output,
+            container: this.state.container_log
+        };
+        const labels = { operation: '维护日志', container: '运行日志' };
+        const text = logs[this.activeLog] || '暂无日志';
+        const wasAtBottom = this.logBox.scrollHeight - this.logBox.scrollTop - this.logBox.clientHeight < 24;
+        if (this.logBox.textContent !== text) this.logBox.textContent = text;
+        if (this.followLog || wasAtBottom) this.logBox.scrollTop = this.logBox.scrollHeight;
+        this.followLog = false;
+        this.logTitle.textContent = labels[this.activeLog];
+        Object.keys(this.logTabs).forEach(name => {
+            const active = name === this.activeLog;
+            this.logTabs[name].className = 'cbi-button' + (active ? ' cbi-button-action' : '');
+            if (this.logTabs[name].setAttribute) this.logTabs[name].setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+    },
+    refreshLogs: async function() {
+        if (!this.logPanel) return;
+        if ('offsetParent' in this.logPanel && this.logPanel.offsetParent === null) return;
+        try {
+            const logs = await this.snapshot('logs');
+            this.state = Object.assign(this.state || {}, logs);
+            this.paintLog();
+        } catch (error) {}
+    },
+    run: async function(action) {
+        if (this.localBusy || (this.state && this.state.busy)) throw new Error('已有操作正在执行，请等待完成。');
+        this.setBusy(true);
+        this.awaitingTaskDetails = true;
+        try {
+            const r = await fs.exec('/usr/lib/sub-store/job.sh', ['--enqueue', action]);
+            if (r.code !== 0) throw new Error(r.stderr || r.stdout || '操作提交失败');
+            if (action === 'check') this.selectLog('operation');
+            await this.refresh('summary');
+        } catch (error) {
+            if (/timed out|timeout/i.test(error.message || '')) {
+                await this.refresh('summary');
+                ui.addNotification(null, E('p', {}, ['等待设备响应超时；操作可能已在后台启动，请查看维护日志，暂勿重复点击。']), 'warning');
+                return;
+            }
+            ui.addNotification(null, E('p', {}, [error.message]), 'error');
+            this.awaitingTaskDetails = false;
+            throw error;
+        } finally { this.setBusy(false); }
+    },
+    confirm: function(action, title, message) {
+        ui.showModal(title, [E('p', {}, [message]), E('div', { 'class': 'right' }, [
+            E('button', { 'class': 'cbi-button', click: ui.hideModal }, ['取消']), ' ',
+            E('button', { 'class': 'cbi-button cbi-button-negative', click: ui.createHandlerFn(this, async function() {
+                ui.hideModal();
+                if (action === 'rotate-key') this.reloadAfterTask = true;
+                try { await this.run(action); }
+                catch (error) { this.reloadAfterTask = false; throw error; }
+            }) }, ['确认执行'])
+        ])]);
+    },
+    button: function(label, action, style) {
+        const button = E('button', { 'class': 'cbi-button cbi-button-' + (style || 'action'),
+            click: ui.createHandlerFn(this, function() { return this.run(action); }) }, [label]);
+        this.buttons.push(button);
+        return button;
+    },
+    handleSave: async function() {
+        if (this.localBusy || this.state.busy) throw new Error('请等待维护操作完成后再保存。');
+        this.setBusy(true);
+        try {
+            await this.map.save(null, true);
+            const result = await commit('sub-store');
+            if (result && result !== 0) throw new Error('提交设置失败');
+            await ui.changes.init();
+            ui.addNotification(null, E('p', {}, ['设置已保存；点击保存并应用或重启后生效。']), 'info');
+        } finally { this.setBusy(false); }
+    },
+    handleSaveApply: async function() {
+        await this.handleSave();
+        this.reloadAfterTask = true;
+        try { await this.run('restart'); }
+        catch (error) { this.reloadAfterTask = false; throw error; }
+    },
+    handleReset: function() { return this.map.reset(); },
+    render: async function(data) {
+        this.state = data[1];
+        this.buttons = [];
+        this.status = E('p');
+        this.version = E('p');
+        this.operation = E('p', { 'aria-live': 'polite' });
+        this.address = E('input', { id: 'sub-store-management-address', 'class': 'cbi-input-text', readonly: true, style: 'width:100%',
+            'aria-label': '访问地址' });
+        this.open = E('a', { 'class': 'cbi-button cbi-button-positive sub-store-open-button', target: '_blank', rel: 'noopener noreferrer' }, ['点击打开 sub-store']);
+        const copy = E('button', { 'class': 'cbi-button', click: ui.createHandlerFn(this, async function() {
+            if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(this.address.value);
+            else {
+                this.address.focus(); this.address.select();
+                if (!document.execCommand('copy')) throw new Error('自动复制不可用，请复制已选中的链接。');
+            }
+            ui.addNotification(null, E('p', {}, ['管理链接已复制。']), 'info');
+        }) }, ['复制访问地址']);
+        const start = this.button('启动服务', 'start');
+        const stop = this.button('停止服务', 'stop', 'negative');
+        const restart = this.button('重启服务', 'restart');
+        const statusSection = E('div', { 'class': 'cbi-section sub-store-overview' }, [
+            E('h3', {}, ['服务概览']), this.status, this.version,
+            E('div', { 'class': 'sub-store-primary-actions' }, [this.open, copy]),
+            E('div', { 'class': 'sub-store-service-actions' }, [
+                E('span', { 'class': 'sub-store-action-label' }, ['服务控制']), start, stop, restart
+            ]),
+            E('label', { 'class': 'sub-store-address-label', for: 'sub-store-management-address' }, ['访问地址']), this.address,
+            E('p', { 'class': 'cbi-value-description' }, ['完整地址含 API 参数，请直接复制使用。']),
+            this.operation
+        ]);
+        const m = this.map = new form.Map('sub-store', null, '管理官方 Sub-Store Docker；订阅与配置请在管理页面操作。');
+        const s = m.section(form.NamedSection, 'main', 'settings');
+        s.tab('basic', '基本设置');
+        s.tab('advanced', '高级设置');
+        s.tab('logs', '日志与诊断');
+        s.tab('maintenance', '更新维护');
+        let o = s.taboption('basic', form.Value, 'frontend_port', '管理页面端口');
+        o.datatype = 'port'; o.rmempty = false; o.default = '3001';
+        o.description = '默认 3001；修改后同步调整端口转发。';
+        const frontend = o;
+        o = s.taboption('basic', form.Value, 'access_host', '访问主机名');
+        o.description = '留空使用 LAN 地址；也可填写域名或 IP，不含协议和端口。';
+        o.validate = function(section, value) {
+            return !value || (value.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(value) &&
+                !/\.\.|-\.|\.-/.test(value)) || '请输入域名或 IPv4，不含协议和端口。';
+        };
+        o = s.taboption('basic', form.Value, 'public_url', '公开访问地址');
+        o.placeholder = 'https://sub.example.com';
+        o.description = '可选；使用反向代理或外部端口时填写，优先用于生成管理链接。';
+        o.validate = function(section, value) {
+            if (!value) return true;
+            if (!/^https?:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:\/[^?#\s]*)?$/.test(value))
+                return '请输入不含查询参数的 HTTP 或 HTTPS 地址。';
+            const authority = value.replace(/^https?:\/\//, '').split('/')[0];
+            const host = authority.split(':')[0];
+            if (!host || host.length > 253 || !/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) || /\.\.|-\.|\.-/.test(host))
+                return '公开访问地址中的主机名无效。';
+            const port = authority.includes(':') ? +authority.split(':').pop() : 0;
+            return !port || (port >= 1 && port <= 65535) || '端口必须在 1 到 65535 之间。';
+        };
+        o = s.taboption('advanced', form.Value, 'backend_port', '后端 API 端口');
+        o.datatype = 'port'; o.rmempty = false; o.default = '3000';
+        o.validate = function(section, value) { return +value !== +frontend.formvalue(section) || '前后端端口不能相同。'; };
+        o.description = '仅供后端直连，普通用户保持默认。';
+        o = s.taboption('advanced', form.Value, 'api_path', 'API 随机路径');
+        o.password = true; o.rmempty = false;
+        o.description = '后端访问密钥，已包含在管理地址中，请勿公开。';
+        o.validate = function(section, value) { return /^[a-fA-F0-9]{48}$/.test(value) || '请输入 48 位十六进制字符。'; };
+        o = s.taboption('advanced', form.Value, 'sync_cron', '自动同步计划');
+        o.default = '55 23 * * *'; o.rmempty = false;
+        o.description = '默认每天北京时间 23:55；不了解 Cron 时保持默认。';
+        o.validate = function(section, value) { return validCron(value) || 'Cron 格式或字段范围不正确。'; };
+        this.api = E('input', { readonly: true, style: 'width:100%', 'aria-label': '后端直连地址' });
+        this.storage = E('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' });
+        this.image = E('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' });
+        this.appVersion = E('span');
+        this.created = E('span');
+        this.activeLog = 'container';
+        this.followLog = true;
+        this.logTabs = {};
+        this.logTitle = E('span', { 'aria-live': 'polite' }, ['运行日志']);
+        this.logHint = E('span');
+        this.logBox = E('pre', { 'class': 'sub-store-log-output', role: 'log', 'aria-label': '日志内容' });
+        const logTab = (name, label) => {
+            const tab = E('button', { 'class': 'cbi-button', 'aria-pressed': 'false',
+                click: ui.createHandlerFn(this, function() { this.selectLog(name); }) }, [label]);
+            this.logTabs[name] = tab;
+            return tab;
+        };
+        const checkService = this.button('检查服务', 'check', 'action');
+        this.clearLogsButton = E('button', { 'class': 'cbi-button cbi-button-negative',
+            click: ui.createHandlerFn(this, function() {
+                return this.confirm('clear-logs', '清空维护日志',
+                    '这会清除启动、重启、更新和检查服务产生的维护记录。Sub-Store 的订阅、配置、数据卷和 Docker 运行日志不会被删除。');
+            }) }, ['清空维护日志']);
+        this.buttons.push(this.clearLogsButton);
+        const logPanel = this.logPanel = E('div', { 'class': 'sub-store-log-panel' }, [
+            E('div', { 'class': 'sub-store-log-toolbar' }, [
+                E('div', { 'class': 'sub-store-log-tabs', role: 'group', 'aria-label': '日志类型' }, [
+                    logTab('container', '运行日志'), logTab('operation', '维护日志')
+                ]),
+                E('div', { 'class': 'sub-store-log-actions' }, [checkService, this.clearLogsButton])
+            ]),
+            E('div', { 'class': 'sub-store-log-heading' }, [
+                E('strong', {}, [this.logTitle]),
+                E('span', { 'class': 'cbi-value-description' }, [this.logHint])
+            ]),
+            this.logBox
+        ]);
+        const display = (tab, id, label, node) => {
+            const option = s.taboption(tab, form.DummyValue, id, label);
+            option.renderWidget = function() { return node; };
+        };
+        display('advanced', '_api', '后端直连地址', this.api);
+        display('advanced', '_storage', '实际数据存储路径', this.storage);
+        display('maintenance', '_image', '当前 Docker 镜像', this.image);
+        display('maintenance', '_app_version', 'Sub-Store 版本', this.appVersion);
+        display('maintenance', '_created', '容器创建时间', this.created);
+        display('logs', '_logs', '运行与维护日志', logPanel);
+        display('maintenance', '_update', 'Sub-Store 镜像更新', E('div', {}, [
+            E('p', {}, ['更新官方程序；重建容器并保留数据。']),
+            this.button('更新 Sub-Store 镜像', 'update', 'positive')
+        ]));
+        const rotate = E('button', { 'class': 'cbi-button cbi-button-negative',
+            click: ui.createHandlerFn(this, function() {
+                return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');
+            }) }, ['重新生成 API 密钥']);
+        this.buttons.push(rotate);
+        display('maintenance', '_rotate', 'API 访问密钥', E('div', {}, [
+            E('p', {}, ['管理地址泄露时使用；旧地址会失效。']), rotate
+        ]));
+        const formNode = await m.render();
+        this.paint();
+        poll.add(async () => {
+            await this.refresh('summary');
+            await this.refreshLogs();
+        }, 5);
+        return E('div', { 'class': 'sub-store-page' }, [
+            E('style', {}, ['.sub-store-page .sub-store-overview{border-radius:12px;padding:1.25em;margin-bottom:1.2em}.sub-store-page .cbi-button{margin-bottom:.25em}.sub-store-page pre{font-size:inherit}.sub-store-page input[readonly]{box-sizing:border-box}.sub-store-page .sub-store-status{display:inline-flex;align-items:center;gap:.45em;max-width:100%;box-sizing:border-box;margin:.25em 0 .75em;padding:.38em .7em;border:1px solid;border-radius:4px;font-weight:600;line-height:1.4}.sub-store-page .sub-store-status.is-running{color:#256b36;background:#eaf5ec;border-color:#bfdfc5}.sub-store-page .sub-store-status.is-running:before{content:"";width:.5em;height:.5em;flex:none;border-radius:50%;background:#32934b}.sub-store-page .sub-store-status.is-warning{color:#765411;background:#fff5dc;border-color:#ead38e}.sub-store-page .sub-store-open-button{text-transform:none}.sub-store-page .sub-store-primary-actions,.sub-store-page .sub-store-service-actions{display:flex;align-items:center;gap:.5em;flex-wrap:wrap;margin:.75em 0}.sub-store-page .sub-store-service-actions{padding-top:.7em;border-top:1px solid var(--border-color,#ddd)}.sub-store-page .sub-store-action-label,.sub-store-page .sub-store-address-label{font-weight:600}.sub-store-page .sub-store-address-label{display:block;margin:.9em 0 .35em}.sub-store-page .sub-store-log-panel{border:1px solid var(--border-color,#bbb);border-radius:8px;padding:.85em;background:var(--background-color-high,#fff)}.sub-store-page .sub-store-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75em;flex-wrap:wrap}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}.sub-store-page .sub-store-log-tabs{padding:.25em;border-radius:6px;background:var(--background-color-low,#f5f5f5)}.sub-store-page .sub-store-log-heading{display:flex;align-items:baseline;gap:.65em;flex-wrap:wrap;margin:.85em 0 .4em}.sub-store-page .sub-store-log-heading .cbi-value-description{margin:0}.sub-store-page .sub-store-log-output{box-sizing:border-box;width:100%;height:24em;max-height:55vh;overflow:auto;overscroll-behavior:contain;white-space:pre;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:6px;background:var(--background-color-low,#f7f7f7);font-family:monospace;font-size:.9em;line-height:1.5}@media(prefers-color-scheme:dark){.sub-store-page .sub-store-status.is-running{color:#b5dfbd;background:#23422b;border-color:#386b44}.sub-store-page .sub-store-status.is-warning{color:#eed694;background:#463a21;border-color:#76602e}}@media(max-width:600px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-tabs .cbi-button{flex:1}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}']),
+            E('h2', {}, ['sub-store']), statusSection, formNode]);
+    }
+});

@@ -1,0 +1,8 @@
+{
+  "admin/services/sub-store": {
+    "title": "sub-store",
+    "order": 88,
+    "action": { "type": "view", "path": "sub-store/manage" },
+    "depends": { "acl": ["luci-app-sub-store"], "uci": {"sub-store": true} }
+  }
+}

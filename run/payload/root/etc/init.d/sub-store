@@ -1,0 +1,25 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+USE_PROCD=0
+
+start() {
+    /usr/bin/sub-storectl start
+}
+
+stop() {
+    /usr/bin/sub-storectl stop
+}
+
+reload() {
+    /usr/bin/sub-storectl restart
+}
+
+restart() {
+    /usr/bin/sub-storectl restart
+}
+
+status() {
+    /usr/bin/sub-storectl status
+}

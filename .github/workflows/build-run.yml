@@ -1,0 +1,276 @@
+name: Build sub-store installer
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  docker-smoke:
+    name: Test current official Docker image
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Start and verify official split-mode container
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_path=$(openssl rand -hex 24)
+          cleanup() {
+            docker rm -f sub-store-smoke >/dev/null 2>&1 || true
+            docker volume rm sub-store-smoke-data >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker volume create sub-store-smoke-data >/dev/null
+          docker run -d \
+            --name sub-store-smoke \
+            -e TZ=Asia/Shanghai \
+            -e SUB_STORE_FRONTEND_HOST=0.0.0.0 \
+            -e SUB_STORE_FRONTEND_PORT=3001 \
+            -e SUB_STORE_BACKEND_API_HOST=0.0.0.0 \
+            -e SUB_STORE_BACKEND_API_PORT=3000 \
+            -e SUB_STORE_BACKEND_MERGE= \
+            -e "SUB_STORE_FRONTEND_BACKEND_PATH=/$api_path" \
+            -e SUB_STORE_BACKEND_PREFIX=true \
+            -v sub-store-smoke-data:/opt/app/data \
+            xream/sub-store:latest
+          for attempt in $(seq 1 60); do
+            if docker exec -i sub-store-smoke node --input-type=commonjs - \
+              < run/payload/root/usr/lib/sub-store/healthcheck.js; then
+              docker inspect -f 'image={{.Image}} created={{.Created}}' sub-store-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs --tail 100 sub-store-smoke
+          exit 1
+
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Calculate package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" =~ ^refs/tags/v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            tag="$GITHUB_REF_NAME"
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          else
+            if tag=$(git describe --tags --match 'v[0-9]*' --abbrev=0 "$GITHUB_SHA" 2>/dev/null); then
+              if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                echo "Latest version tag must use vMAJOR.MINOR.PATCH: $tag" >&2
+                exit 1
+              fi
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              base_patch="${BASH_REMATCH[3]}"
+              commits_since_release=$(git rev-list --count "$tag..$GITHUB_SHA")
+              patch=$((base_patch + commits_since_release))
+              version="$major.$minor.$patch"
+            else
+              tag=""
+              version="0.0.1"
+            fi
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Building sub-store iStoreOS package version $version"
+
+      - name: Generate numbered release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          {
+            printf '# sub-store v%s\n\n' "$VERSION"
+            printf 'iStoreOS 手动安装包（Makeself 自解压格式）。下载附件 `sub-store-%s.run`，在 iStore → 手动安装中选择或拖入即可安装；首次安装需要联网安装 Docker 依赖并拉取镜像。\n\n' "$VERSION"
+            printf '## 优化内容\n\n'
+            index=0
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              commits=$(git rev-list --reverse "$PREVIOUS_TAG..$GITHUB_SHA")
+            else
+              commits=$(git rev-list --reverse "$GITHUB_SHA")
+            fi
+            while IFS= read -r commit; do
+              subject="$(git show -s --format=%s "$commit")"
+              [[ "$subject" == *"[skip ci]"* ]] && continue
+              body="$(git show -s --format=%b "$commit")"
+              index=$((index + 1))
+              printf '%d. %s\n' "$index" "$subject"
+              if [[ -n "$body" ]]; then
+                while IFS= read -r line; do
+                  [[ -z "$line" ]] || printf '   %s\n' "$line"
+                done <<< "$body"
+              fi
+              printf '\n'
+            done <<< "$commits"
+            if ((index == 0)); then
+              printf '1. 首次发布：提供 sub-store iStoreOS 手动安装包。\n'
+            fi
+          } > dist/release-notes.md
+          cat dist/release-notes.md
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.tag }}
+
+      - name: Check shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            scripts/build-run.sh \
+            run/payload/install.sh \
+            run/payload/root/etc/init.d/sub-store \
+            run/payload/root/usr/bin/sub-storectl \
+            run/payload/root/usr/lib/sub-store/cron.sh \
+            run/payload/root/usr/lib/sub-store/job.sh \
+            run/payload/root/usr/lib/sub-store/permissions.sh \
+            tests/install-permissions.sh \
+            tests/operation-feedback.sh \
+            tests/cron-validation.sh \
+            tests/docker-volume-storage.sh \
+            tests/image-update.sh; do
+            sh -n "$script"
+          done
+
+      - name: Install packaging and Lua tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends makeself lua5.1 busybox-static
+
+      - name: Check OpenWrt BusyBox shell syntax and API-key generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            scripts/build-run.sh \
+            run/payload/install.sh \
+            run/payload/root/etc/init.d/sub-store \
+            run/payload/root/usr/bin/sub-storectl \
+            run/payload/root/usr/lib/sub-store/cron.sh \
+            run/payload/root/usr/lib/sub-store/job.sh \
+            run/payload/root/usr/lib/sub-store/permissions.sh \
+            tests/install-permissions.sh \
+            tests/operation-feedback.sh \
+            tests/cron-validation.sh \
+            tests/docker-volume-storage.sh \
+            tests/image-update.sh; do
+            if grep -q $'\r' "$script"; then
+              echo "CRLF line endings are not allowed in shell script: $script" >&2
+              exit 1
+            fi
+            busybox ash -n "$script"
+          done
+          grep -Fxq 'set -e' run/payload/root/usr/bin/sub-storectl
+          for attempt in $(seq 1 20); do
+            key="$(busybox ash -c "dd if=/dev/urandom bs=2048 count=1 2>/dev/null | LC_ALL=C tr -dc '0123456789abcdef' | cut -c1-48")"
+            [[ "$key" =~ ^[0-9a-f]{48}$ ]]
+          done
+          awk_bin="$(mktemp -d)"
+          trap 'rm -rf "$awk_bin"' EXIT
+          cat > "$awk_bin/awk" <<'EOF'
+          #!/bin/sh
+          exec busybox awk "$@"
+          EOF
+          chmod +x "$awk_bin/awk"
+          PATH="$awk_bin:$PATH" busybox ash tests/cron-validation.sh
+          busybox ash tests/docker-volume-storage.sh
+          busybox ash tests/image-update.sh
+          BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
+          busybox ash tests/install-permissions.sh
+
+      - name: Check native LuCI view and status endpoint
+        run: |
+          luac5.1 -p run/payload/root/usr/lib/sub-store/status tests/luci-status.lua
+          lua5.1 tests/luci-status.lua .
+          node --check run/payload/root/www/luci-static/resources/view/sub-store/manage.js
+          node --test tests/luci-view.test.js
+
+      - name: Check frontend health script and regression cases
+        run: |
+          node --check run/payload/root/usr/lib/sub-store/healthcheck.js
+          node --test tests/frontend-health.test.js
+
+      - name: Build installer
+        run: sh scripts/build-run.sh
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+
+      - name: Verify package and self-extractor
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="dist/sub-store-${VERSION}.run"
+          test -s "$package"
+
+          "$package" --check
+          extracted="$(mktemp -d)"
+          trap 'rm -rf "$extracted"' EXIT
+          "$package" --noexec --target "$extracted"
+          test "$(stat -c '%a' "$extracted/root/www/luci-static/resources/view/sub-store")" = 755
+          test "$(stat -c '%a' "$extracted/root/www/luci-static/resources/view/sub-store/manage.js")" = 644
+
+          set +e
+          output=$(sh "$package" 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          grep -Fq 'Run the .run installer as root.' <<<"$output"
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: sub-store-${{ steps.version.outputs.value }}
+          path: |
+            dist/sub-store-${{ steps.version.outputs.value }}.run
+            dist/release-notes.md
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Download installer artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: sub-store-${{ needs.build.outputs.version }}
+          path: dist
+
+      - name: Create release and attach installer
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: sub-store v${{ needs.build.outputs.version }}
+          body_path: dist/release-notes.md
+          files: dist/sub-store-${{ needs.build.outputs.version }}.run
+          fail_on_unmatched_files: true
+          token: ${{ secrets.SUB_STORE_RELEASE_TOKEN }}

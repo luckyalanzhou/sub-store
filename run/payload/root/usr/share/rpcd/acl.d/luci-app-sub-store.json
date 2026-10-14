@@ -1,0 +1,15 @@
+{
+  "luci-app-sub-store": {
+    "description": "Manage the sub-store Docker service",
+    "read": {
+      "uci": ["sub-store"],
+      "ubus": { "file": ["exec"] },
+      "file": { "/usr/lib/sub-store/status": ["exec"] }
+    },
+    "write": {
+      "uci": ["sub-store"],
+      "ubus": { "file": ["exec"] },
+      "file": { "/usr/lib/sub-store/job.sh": ["exec"] }
+    }
+  }
+}
