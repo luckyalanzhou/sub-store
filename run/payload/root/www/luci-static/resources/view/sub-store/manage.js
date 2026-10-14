@@ -197,11 +197,12 @@ return view.extend({
             this.updateStatus.textContent = '检查插件与官方镜像';
     },
     beginUpdateReloadCountdown: function(version) {
-        if (this.pluginReloadTimer || typeof window === 'undefined' || !window.setInterval) return;
+        if (this.pluginReloadTimer != null || this.pluginReloadCountdown !== undefined ||
+            typeof window === 'undefined' || !window.setInterval) return;
         this.pluginReloadVersion = version;
         this.pluginReloadCountdown = 5;
         this.updateControls();
-        this.pluginReloadTimer = window.setInterval(ui.createHandlerFn(this, function() {
+        this.pluginReloadTimer = window.setInterval(() => {
             this.pluginReloadCountdown -= 1;
             this.updateControls();
             if (this.pluginReloadCountdown <= 0) {
@@ -209,7 +210,7 @@ return view.extend({
                 this.pluginReloadTimer = null;
                 window.location.reload();
             }
-        }), 1000);
+        }, 1000);
     },
     selectLog: function(name) {
         this.activeLog = name;
@@ -416,7 +417,7 @@ return view.extend({
         o.validate = function(section, value) { return validCron(value) || 'Cron 格式或字段范围不正确。'; };
         this.api = E('input', { readonly: true, style: 'width:100%', 'aria-label': '后端直连地址' });
         this.storage = E('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' });
-        this.image = E('code');
+        this.image = E('span');
         this.imageDigest = E('small', { 'class': 'sub-store-image-digest' });
         this.appVersion = E('span');
         this.created = E('span');
@@ -463,30 +464,21 @@ return view.extend({
         const rotate = E('button', { 'class': 'cbi-button cbi-button-negative',
             click: ui.createHandlerFn(this, function() {
                 return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');
-            }) }, ['重新生成']);
+            }) }, ['重新生成密钥']);
         this.buttons.push(rotate);
-        const summaryItem = (label, value) => E('div', { 'class': 'sub-store-maintenance-summary-item' }, [
-            E('span', { 'class': 'sub-store-maintenance-label' }, [label]), value
-        ]);
-        const updateRow = E('div', { 'class': 'sub-store-maintenance-row' }, [
-            E('strong', {}, ['插件与镜像']),
-            E('span', { 'class': 'sub-store-maintenance-status' }, [this.updateStatus]),
-            this.updateButton
-        ]);
-        const keyRow = E('div', { 'class': 'sub-store-maintenance-row' }, [
-            E('strong', {}, ['API 密钥']),
-            E('span', { 'class': 'sub-store-maintenance-status' }, ['泄露后更换，旧链接失效']),
-            rotate
-        ]);
-        this.maintenancePanel = E('div', { 'class': 'sub-store-maintenance-panel' }, [
-            E('div', { 'class': 'sub-store-maintenance-summary' }, [
-                summaryItem('Docker 镜像', E('span', { 'class': 'sub-store-image-value' }, [this.image, this.imageDigest])),
-                summaryItem('Sub-Store', this.appVersion),
-                summaryItem('创建时间', this.created)
-            ]),
-            E('div', { 'class': 'sub-store-maintenance-actions' }, [updateRow, keyRow])
-        ]);
-        display('maintenance', '_maintenance', '维护操作', this.maintenancePanel);
+        const imageValue = E('span', {}, [this.image, ' ', this.imageDigest]);
+        const displayMaintenance = (id, label, node, description) => {
+            const option = s.taboption('maintenance', form.DummyValue, id, label);
+            if (description) option.description = description;
+            option.renderWidget = function() { return node; };
+        };
+        displayMaintenance('_image', 'Docker 镜像', imageValue);
+        displayMaintenance('_app_version', 'Sub-Store 版本', this.appVersion);
+        displayMaintenance('_created', '容器创建时间', this.created);
+        displayMaintenance('_updates', '插件与镜像更新', E('div', {}, [
+            this.updateButton, ' ', E('span', { 'aria-live': 'polite' }, [this.updateStatus])
+        ]));
+        displayMaintenance('_rotate', 'API 密钥', rotate, '重新生成后，旧管理地址立即失效。');
         display('logs', '_logs', '', logPanel);
         const formNode = await m.render();
         this.paint();
@@ -508,22 +500,10 @@ return view.extend({
             '.sub-store-page .sub-store-service-actions{padding-top:.7em;border-top:1px solid var(--border-color,#ddd)}',
             '.sub-store-page .sub-store-action-label,.sub-store-page .sub-store-address-label{font-weight:600}',
             '.sub-store-page .sub-store-address-label{display:block;margin:.9em 0 .35em}',
-            '.sub-store-page #cbi-sub-store-main-_maintenance,.sub-store-page #cbi-sub-store-main-_logs{display:block!important}',
-            '.sub-store-page #cbi-sub-store-main-_maintenance>.cbi-value-title,.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-title{display:none!important}',
-            '.sub-store-page #cbi-sub-store-main-_maintenance>.cbi-value-field,.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{display:block!important;width:100%!important;max-width:none!important;margin:0!important}',
-            '.sub-store-page .sub-store-maintenance-panel{display:grid;gap:.75em;width:100%;max-width:1080px;margin:0 auto}',
-            '.sub-store-page .sub-store-maintenance-summary{display:grid;grid-template-columns:minmax(0,2fr) minmax(8em,.7fr) minmax(12em,1fr);overflow:hidden;border:1px solid var(--border-color,#ddd);border-radius:8px;background:var(--background-color-high,#fff)}',
-            '.sub-store-page .sub-store-maintenance-summary-item{min-width:0;padding:.75em 1em;border-right:1px solid var(--border-color,#ddd)}',
-            '.sub-store-page .sub-store-maintenance-summary-item:last-child{border-right:0}',
-            '.sub-store-page .sub-store-maintenance-label{display:block;margin-bottom:.25em;color:#7b8190;font-size:.85em}',
-            '.sub-store-page .sub-store-image-value{display:flex;min-width:0;align-items:baseline;gap:.65em;flex-wrap:wrap}',
-            '.sub-store-page .sub-store-image-value code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.sub-store-page #cbi-sub-store-main-_logs{display:block!important}',
+            '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-title{display:none!important}',
+            '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{display:block!important;width:100%!important;max-width:none!important;margin:0!important}',
             '.sub-store-page .sub-store-image-digest{color:#7b8190;font-family:monospace}',
-            '.sub-store-page .sub-store-maintenance-actions{overflow:hidden;border:1px solid var(--border-color,#ddd);border-radius:8px;background:var(--background-color-high,#fff)}',
-            '.sub-store-page .sub-store-maintenance-row{display:grid;grid-template-columns:minmax(7em,.6fr) minmax(0,2fr) auto;align-items:center;gap:1em;padding:.8em 1em;border-bottom:1px solid var(--border-color,#ddd)}',
-            '.sub-store-page .sub-store-maintenance-row:last-child{border-bottom:0}',
-            '.sub-store-page .sub-store-maintenance-status{color:#7b8190}',
-            '.sub-store-page .sub-store-maintenance-row .cbi-button{margin:0}',
             '.sub-store-page .sub-store-log-panel{box-sizing:border-box;width:100%;max-width:1280px;margin:0 auto;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:8px;background:var(--background-color-high,#fff)}',
             '.sub-store-page .sub-store-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75em;flex-wrap:wrap}',
             '.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}',
@@ -532,7 +512,7 @@ return view.extend({
             '.sub-store-page .sub-store-log-heading .cbi-value-description{margin:0}',
             '.sub-store-page .sub-store-log-output{box-sizing:border-box;width:100%;height:24em;max-height:55vh;overflow:auto;overscroll-behavior:contain;white-space:pre;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:6px;background:var(--background-color-low,#f7f7f7);font-family:monospace;font-size:.9em;line-height:1.5}',
             '@media(prefers-color-scheme:dark){.sub-store-page .sub-store-status.is-running{color:#b5dfbd;background:#23422b;border-color:#386b44}.sub-store-page .sub-store-status.is-warning{color:#eed694;background:#463a21;border-color:#76602e}}',
-            '@media(max-width:700px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-maintenance-summary{grid-template-columns:minmax(0,1fr)}.sub-store-page .sub-store-maintenance-summary-item{border-right:0;border-bottom:1px solid var(--border-color,#ddd)}.sub-store-page .sub-store-maintenance-summary-item:last-child{border-bottom:0}.sub-store-page .sub-store-maintenance-row{grid-template-columns:minmax(0,1fr) auto;gap:.35em .75em}.sub-store-page .sub-store-maintenance-row .sub-store-maintenance-status{grid-column:1}.sub-store-page .sub-store-maintenance-row .cbi-button{grid-column:2;grid-row:1 / span 2}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-tabs .cbi-button{flex:1}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
+            '@media(max-width:700px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-tabs .cbi-button{flex:1}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
         ].join('');
         return E('div', { 'class': 'sub-store-page' }, [
             E('style', {}, [pageStyles]),

@@ -8,7 +8,11 @@ function setup() {
         app_version: '2.42.3', created: '2026-10-13T00:00:00Z', output: 'maintenance log', container_log: 'runtime log',
         storage: '/mnt/docker/volumes/sub-store-data/_data', plugin_latest_version: '', plugin_update_available: false };
     const E = (tag, attrs = {}, children = []) => ({ tag, ...attrs, children, textContent: '', value: '', focus() {}, select() {} });
-    const ui = { createHandlerFn: (ctx, fn) => fn.bind(ctx), changes: { init: async () => {} },
+    const ui = { createHandlerFn: (ctx, fn) => function(...args) {
+        if (global.window && global.window.requireCurrentTarget && !args.some(arg => arg && arg.currentTarget))
+            throw new TypeError('event.currentTarget is required');
+        return fn.apply(ctx, args);
+    }, changes: { init: async () => {} },
         addNotification: (...args) => calls.push(['notice', ...args]), showModal: (...args) => calls.push(['modal', ...args]), hideModal() {} };
     const uci = { load: async () => {}, unload() {} };
     const backend = { exec: async (path, args) => {
@@ -62,15 +66,13 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.match(source, /sub-store-status\{[^}]*border-radius:4px/);
     assert.match(source, /sub-store-open-button\{text-transform:none\}/);
     assert.equal(t.view.storage.textContent, t.state.storage);
-    assert.equal(t.options._maintenance.tab, 'maintenance');
-    assert.equal(t.options._image, undefined);
-    assert.equal(t.options._updates, undefined);
-    assert.equal(t.options._rotate, undefined);
-    assert.match(t.view.maintenancePanel.class, /sub-store-maintenance-panel/);
+    for (const id of ['_image', '_app_version', '_created', '_updates', '_rotate'])
+        assert.equal(t.options[id].tab, 'maintenance');
+    assert.equal(t.options._maintenance, undefined);
+    assert.equal(t.view.maintenancePanel, undefined);
     assert.doesNotMatch(source, /完整地址含 API 参数/);
-    assert.doesNotMatch(source, /sub-store-maintenance-card/);
-    assert.match(source, /sub-store-maintenance-row/);
-    assert.match(source, /#cbi-sub-store-main-_maintenance/);
+    assert.doesNotMatch(source, /sub-store-maintenance-(?:panel|card|row)/);
+    assert.doesNotMatch(source, /#cbi-sub-store-main-_maintenance/);
     assert.match(source, /#cbi-sub-store-main-_logs/);
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBox.textContent, 'runtime log');
@@ -145,10 +147,11 @@ test('plugin version comparison handles unbounded numeric components', () => {
 test('combined update verifies a newly installed plugin and shows a refresh countdown', async () => {
     const t = setup(); await t.view.render(await t.view.load());
     const previousWindow = global.window;
-    const timers = [], calls = [];
+    const timers = [], calls = [], clearedTimers = [];
     global.window = {
+        requireCurrentTarget: true,
         setInterval: fn => { timers.push(fn); return timers.length; },
-        clearInterval() {},
+        clearInterval: id => clearedTimers.push(id),
         location: { reload: () => calls.push('reload') }
     };
     try {
@@ -159,8 +162,13 @@ test('combined update verifies a newly installed plugin and shows a refresh coun
             action: 'update-all', phase: 'failed', busy: false });
         await t.view.refresh('summary');
         assert.equal(t.view.updateStatus.textContent, '插件已更新至 0.0.22 · 5 秒后刷新');
-        for (let i = 0; i < 5; i++) timers[0]();
+        for (let i = 0; i < 4; i++) {
+            timers[0]();
+            assert.equal(t.view.updateStatus.textContent, '插件已更新至 0.0.22 · ' + (4 - i) + ' 秒后刷新');
+        }
+        timers[0]();
         assert.deepEqual(calls, ['reload']);
+        assert.deepEqual(clearedTimers, [1]);
     } finally {
         if (previousWindow === undefined) delete global.window;
         else global.window = previousWindow;
