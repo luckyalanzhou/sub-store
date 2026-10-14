@@ -10,12 +10,12 @@ echo "operation output: $1"
     if [ -f "$SLOW_UPDATE" ]; then
         dd if=/dev/zero bs=1024 count=600 2>/dev/null | tr '\000' x
         echo 'operation output: update'
-        sleep 8
+        sleep 2
         exit 0
     fi
     exit 7
 }
-[ "$1" != "restart" ] || sleep 3
+[ "$1" != "restart" ] || sleep 1
 EOF
 chmod +x "$TMP/ctl"
 sed -e "s|STATE=/tmp/sub-store-operation|STATE=$TMP/state|" \
@@ -60,7 +60,7 @@ touch "$SLOW_UPDATE"
 started="$(date +%s)"
 run_sh "$TMP/job" --enqueue update
 elapsed=$(( $(date +%s) - started ))
-[ "$elapsed" -lt 5 ] || { echo "enqueue waited ${elapsed}s for the update worker" >&2; exit 1; }
+[ "$elapsed" -lt 2 ] || { echo "enqueue waited ${elapsed}s for the update worker" >&2; exit 1; }
 [ -d "$TMP/state/lock" ]
 attempt=0
 while [ -d "$TMP/state/lock" ]; do

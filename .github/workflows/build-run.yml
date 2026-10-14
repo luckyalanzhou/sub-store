@@ -27,6 +27,7 @@ jobs:
     name: Test current official Docker image
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -69,6 +70,7 @@ jobs:
     name: Allocate or resume release version
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.prepare.outputs.version }}
       tag: ${{ steps.prepare.outputs.tag }}
@@ -90,10 +92,11 @@ jobs:
           BUMP_TYPE: ${{ inputs.bump || 'patch' }}
 
   build:
-    name: Build and verify release assets
+    name: Build, verify, and publish release
     if: github.event_name == 'workflow_dispatch' && needs.prepare-release.outputs.already_complete != 'true'
     needs: [docker-smoke, prepare-release]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - name: Check out the allocated release source
         uses: actions/checkout@v7
@@ -284,27 +287,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: true
-
-  release:
-    name: Publish GitHub Release
-    if: github.event_name == 'workflow_dispatch'
-    needs: [build, prepare-release]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Check out release workflow helper
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-          ref: ${{ needs.prepare-release.outputs.source_sha }}
-
-      - name: Download versioned release assets
-        uses: actions/download-artifact@v8
-        continue-on-error: true
-        with:
-          name: sub-store-${{ needs.prepare-release.outputs.version }}
-          path: dist
 
       - name: Upload, verify, and publish the draft release
         run: python3 scripts/release.py publish

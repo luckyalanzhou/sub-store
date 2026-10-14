@@ -51,12 +51,23 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.address['aria-label'], '访问地址');
     assert.equal(t.view.status.textContent, 'sub-store 服务已启动');
     assert.equal(t.view.status.className, 'sub-store-status is-running');
+    assert.equal(t.view.startButton.disabled, true);
+    assert.equal(t.view.stopButton.disabled, false);
+    assert.equal(t.view.restartButton.disabled, false);
     assert.equal(t.view.appVersion.textContent, '2.42.3');
     assert.equal(page.children[2].children[0].children[0], '服务概览');
     assert.match(source, /sub-store-status\{display:inline-flex/);
     assert.match(source, /sub-store-status\{[^}]*border-radius:4px/);
     assert.match(source, /sub-store-open-button\{text-transform:none\}/);
     assert.equal(t.view.storage.textContent, t.state.storage);
+    assert.equal(t.options._maintenance.tab, 'maintenance');
+    assert.equal(t.options._image, undefined);
+    assert.equal(t.options._updates, undefined);
+    assert.equal(t.options._rotate, undefined);
+    assert.match(t.view.maintenancePanel.class, /sub-store-maintenance-panel/);
+    assert.match(source, /#cbi-sub-store-main-_maintenance/);
+    assert.match(source, /#cbi-sub-store-main-_logs/);
+    assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBox.textContent, 'runtime log');
     assert.equal(t.view.clearLogsButton.hidden, true);
     t.view.logTabs.operation.click();
@@ -81,6 +92,28 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.options.public_url.validate('main', 'https://sub.example.test'), true);
     assert.notEqual(t.options.public_url.validate('main', 'https://bad..example.test'), true);
     assert.match(source, /同时检查插件和官方镜像；有更新时自动安装并保留数据/);
+});
+test('service actions follow the current container state', async () => {
+    const t = setup(); await t.view.render(await t.view.load());
+    t.view.state.container = 'exited';
+    t.view.paint();
+    assert.equal(t.view.startButton.disabled, false);
+    assert.equal(t.view.stopButton.disabled, true);
+    assert.equal(t.view.restartButton.disabled, true);
+    t.view.state.container = 'maintenance';
+    t.view.state.busy = true;
+    t.view.paint();
+    assert.equal(t.view.startButton.disabled, true);
+    assert.equal(t.view.stopButton.disabled, true);
+    assert.equal(t.view.restartButton.disabled, true);
+});
+test('recent operation labels are human-readable and container time is localized', () => {
+    const { view } = setup();
+    assert.equal(view.formatOperation('操作成功：update-all；完成时间：2026-10-14 22:38:20'),
+        '操作成功：检查并更新；完成时间：2026-10-14 22:38:20');
+    assert.equal(view.formatOperation('正在执行：rotate-key；开始时间：2026-10-14 22:38:20'),
+        '正在执行：重新生成 API 密钥；开始时间：2026-10-14 22:38:20');
+    assert.match(view.formatLocalDate('2026-10-14T14:37:35.576Z'), /^2026-10-14 \d{2}:37:35$/);
 });
 test('unhealthy container is visible and completed work refreshes details', async () => {
     const t = setup(); await t.view.render(await t.view.load());

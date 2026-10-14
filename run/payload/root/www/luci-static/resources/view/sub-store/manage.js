@@ -35,10 +35,27 @@ function compareVersions(left, right) {
     }
     return 0;
 }
+const operationLabels = {
+    start: '启动服务', stop: '停止服务', restart: '重启服务', update: '更新镜像',
+    'update-all': '检查并更新', 'rotate-key': '重新生成 API 密钥', check: '检查服务',
+    'clear-logs': '清空维护日志'
+};
 
 return view.extend({
     validCron: validCron,
     compareVersions: compareVersions,
+    formatOperation: function(value) {
+        const match = /^(正在执行|操作成功|操作失败)：([^；]+)(.*)$/.exec(value || '');
+        if (!match) return value || '尚无维护操作';
+        return match[1] + '：' + (operationLabels[match[2]] || match[2]) + match[3];
+    },
+    formatLocalDate: function(value) {
+        const date = new Date(value);
+        if (!value || Number.isNaN(date.getTime())) return value || '';
+        const pad = number => String(number).padStart(2, '0');
+        return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' +
+            pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+    },
     snapshot: async function(mode) {
         const r = await fs.exec('/usr/lib/sub-store/status', mode && mode !== 'summary' ? [mode] : []);
         if (r.code !== 0) throw new Error(r.stderr || '读取服务状态失败');
@@ -51,6 +68,13 @@ return view.extend({
         this.localBusy = busy;
         const disabled = busy || !!(this.state && this.state.busy);
         this.buttons.forEach(button => { button.disabled = disabled; });
+        const status = this.state && this.state.container;
+        if (this.startButton)
+            this.startButton.disabled = disabled || !['exited', 'stopped', 'not-created'].includes(status);
+        if (this.stopButton)
+            this.stopButton.disabled = disabled || status !== 'running';
+        if (this.restartButton)
+            this.restartButton.disabled = disabled || status !== 'running';
         if (this.clearLogsButton) this.clearLogsButton.disabled = disabled || this.activeLog === 'container';
         if (this.map && this.map.root && this.map.root.querySelectorAll)
             this.map.root.querySelectorAll('input,select,textarea').forEach(input => { input.disabled = disabled; });
@@ -142,11 +166,11 @@ return view.extend({
         this.address.value = s.url || '';
         this.open.href = s.url || '#';
         this.open.hidden = !s.url || s.container !== 'running';
-        this.operation.textContent = '最近操作：' + (s.operation || '尚无维护操作');
+        this.operation.textContent = '最近操作：' + this.formatOperation(s.operation);
         this.storage.textContent = s.storage || '实际路径暂不可用';
         this.image.textContent = s.image || '容器镜像未就绪';
-        this.appVersion.textContent = s.app_version || '暂未读取到版本';
-        this.created.textContent = s.created || '容器尚未创建';
+        this.appVersion.textContent = s.app_version || '容器日志未提供版本号';
+        this.created.textContent = this.formatLocalDate(s.created) || '容器尚未创建';
         this.api.value = s.api_url || '';
         this.updateControls();
         this.paintLog();
@@ -345,14 +369,15 @@ return view.extend({
             }
             ui.addNotification(null, E('p', {}, ['管理链接已复制。']), 'info');
         }) }, ['复制访问地址']);
-        const start = this.button('启动服务', 'start');
-        const stop = this.button('停止服务', 'stop', 'negative');
-        const restart = this.button('重启服务', 'restart');
+        this.startButton = this.button('启动服务', 'start');
+        this.stopButton = this.button('停止服务', 'stop', 'negative');
+        this.restartButton = this.button('重启服务', 'restart');
         const statusSection = E('div', { 'class': 'cbi-section sub-store-overview' }, [
             E('h3', {}, ['服务概览']), this.status, this.version,
             E('div', { 'class': 'sub-store-primary-actions' }, [this.open, copy]),
             E('div', { 'class': 'sub-store-service-actions' }, [
-                E('span', { 'class': 'sub-store-action-label' }, ['服务控制']), start, stop, restart
+                E('span', { 'class': 'sub-store-action-label' }, ['服务控制']),
+                this.startButton, this.stopButton, this.restartButton
             ]),
             E('label', { 'class': 'sub-store-address-label', for: 'sub-store-management-address' }, ['访问地址']), this.address,
             E('p', { 'class': 'cbi-value-description' }, ['完整地址含 API 参数，请直接复制使用。']),
@@ -366,7 +391,7 @@ return view.extend({
         s.tab('maintenance', '更新维护');
         let o = s.taboption('basic', form.Value, 'frontend_port', '管理页面端口');
         o.datatype = 'port'; o.rmempty = false; o.default = '3001';
-        o.description = '默认 3001；修改后同步调整端口转发。';
+        o.description = '默认 3001；保存后更新 Docker 端口映射，外部端口转发需另行调整。';
         const frontend = o;
         o = s.taboption('basic', form.Value, 'access_host', '访问主机名');
         o.description = '留空使用 LAN 地址；也可填写域名或 IP，不含协议和端口。';
@@ -402,10 +427,10 @@ return view.extend({
         o.validate = function(section, value) { return validCron(value) || 'Cron 格式或字段范围不正确。'; };
         this.api = E('input', { readonly: true, style: 'width:100%', 'aria-label': '后端直连地址' });
         this.storage = E('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' });
-        this.image = E('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' });
+        this.image = E('code');
         this.appVersion = E('span');
         this.created = E('span');
-        this.updateStatus = E('span', { 'aria-live': 'polite' }, ['同时检查插件和官方镜像；有更新时自动安装并保留数据。']);
+        this.updateStatus = E('span', { 'aria-live': 'polite' }, ['尚未检查更新']);
         this.updateButton = this.button('检查更新', 'update-all', 'positive');
         this.activeLog = 'container';
         this.followLog = true;
@@ -445,31 +470,85 @@ return view.extend({
         };
         display('advanced', '_api', '后端直连地址', this.api);
         display('advanced', '_storage', '实际数据存储路径', this.storage);
-        display('maintenance', '_image', '当前 Docker 镜像', this.image);
-        display('maintenance', '_app_version', 'Sub-Store 版本', this.appVersion);
-        display('maintenance', '_created', '容器创建时间', this.created);
-        display('logs', '_logs', '运行与维护日志', logPanel);
-        display('maintenance', '_updates', '插件与 Sub-Store 更新', E('div', {}, [
-            E('p', {}, [this.updateStatus]),
-            E('p', { 'class': 'cbi-value-description' }, ['同时检查插件和官方镜像；有更新时自动安装并保留数据。']),
-            this.updateButton
-        ]));
         const rotate = E('button', { 'class': 'cbi-button cbi-button-negative',
             click: ui.createHandlerFn(this, function() {
                 return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');
             }) }, ['重新生成 API 密钥']);
         this.buttons.push(rotate);
-        display('maintenance', '_rotate', 'API 访问密钥', E('div', {}, [
-            E('p', {}, ['管理地址泄露时使用；旧地址会失效。']), rotate
-        ]));
+        const metric = (label, value) => E('div', { 'class': 'sub-store-maintenance-metric' }, [
+            E('span', { 'class': 'sub-store-maintenance-label' }, [label]), value
+        ]);
+        const updateCard = E('div', { 'class': 'sub-store-maintenance-card' }, [
+            E('div', { 'class': 'sub-store-maintenance-copy' }, [
+                E('strong', {}, ['更新']),
+                E('p', {}, ['检查插件和官方镜像；有更新时自动安装并保留数据。']),
+                E('p', { 'class': 'sub-store-maintenance-status' }, [this.updateStatus])
+            ]),
+            this.updateButton
+        ]);
+        const keyCard = E('div', { 'class': 'sub-store-maintenance-card' }, [
+            E('div', { 'class': 'sub-store-maintenance-copy' }, [
+                E('strong', {}, ['API 密钥']),
+                E('p', {}, ['管理链接泄露时重新生成；旧链接会失效。'])
+            ]),
+            rotate
+        ]);
+        this.maintenancePanel = E('div', { 'class': 'sub-store-maintenance-panel' }, [
+            E('div', { 'class': 'sub-store-maintenance-info' }, [
+                metric('Docker 镜像', this.image),
+                metric('Sub-Store 版本', this.appVersion),
+                metric('容器创建时间', this.created)
+            ]),
+            E('div', { 'class': 'sub-store-maintenance-actions' }, [updateCard, keyCard])
+        ]);
+        display('maintenance', '_maintenance', '维护操作', this.maintenancePanel);
+        display('logs', '_logs', '', logPanel);
         const formNode = await m.render();
         this.paint();
         poll.add(async () => {
             await this.refresh('summary');
             await this.refreshLogs();
         }, 5);
+        const pageStyles = [
+            '.sub-store-page .sub-store-overview{border-radius:12px;padding:1.25em;margin-bottom:1.2em}',
+            '.sub-store-page .cbi-button{margin-bottom:.25em}',
+            '.sub-store-page pre{font-size:inherit}',
+            '.sub-store-page input[readonly]{box-sizing:border-box}',
+            '.sub-store-page .sub-store-status{display:inline-flex;align-items:center;gap:.45em;max-width:100%;box-sizing:border-box;margin:.25em 0 .75em;padding:.38em .7em;border:1px solid;border-radius:4px;font-weight:600;line-height:1.4}',
+            '.sub-store-page .sub-store-status.is-running{color:#256b36;background:#eaf5ec;border-color:#bfdfc5}',
+            '.sub-store-page .sub-store-status.is-running:before{content:"";width:.5em;height:.5em;flex:none;border-radius:50%;background:#32934b}',
+            '.sub-store-page .sub-store-status.is-warning{color:#765411;background:#fff5dc;border-color:#ead38e}',
+            '.sub-store-page .sub-store-open-button{text-transform:none}',
+            '.sub-store-page .sub-store-primary-actions,.sub-store-page .sub-store-service-actions{display:flex;align-items:center;gap:.5em;flex-wrap:wrap;margin:.75em 0}',
+            '.sub-store-page .sub-store-service-actions{padding-top:.7em;border-top:1px solid var(--border-color,#ddd)}',
+            '.sub-store-page .sub-store-action-label,.sub-store-page .sub-store-address-label{font-weight:600}',
+            '.sub-store-page .sub-store-address-label{display:block;margin:.9em 0 .35em}',
+            '.sub-store-page #cbi-sub-store-main-_maintenance,.sub-store-page #cbi-sub-store-main-_logs{display:block!important}',
+            '.sub-store-page #cbi-sub-store-main-_maintenance>.cbi-value-title,.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-title{display:none!important}',
+            '.sub-store-page #cbi-sub-store-main-_maintenance>.cbi-value-field,.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{display:block!important;width:100%!important;max-width:none!important;margin:0!important}',
+            '.sub-store-page .sub-store-maintenance-panel{display:grid;gap:1em;width:100%;max-width:1080px;margin:0 auto}',
+            '.sub-store-page .sub-store-maintenance-info{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75em}',
+            '.sub-store-page .sub-store-maintenance-metric{min-width:0;padding:.8em 1em;border:1px solid var(--border-color,#ddd);border-radius:8px;background:var(--background-color-low,#f7f7f7)}',
+            '.sub-store-page .sub-store-maintenance-label{display:block;margin-bottom:.35em;color:#7b8190;font-size:.9em}',
+            '.sub-store-page .sub-store-maintenance-metric code{display:block;overflow-wrap:anywhere;white-space:normal}',
+            '.sub-store-page .sub-store-maintenance-actions{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:.75em}',
+            '.sub-store-page .sub-store-maintenance-card{display:flex;min-width:0;align-items:center;justify-content:space-between;gap:1em;padding:1em;border:1px solid var(--border-color,#ddd);border-radius:8px;background:var(--background-color-high,#fff)}',
+            '.sub-store-page .sub-store-maintenance-copy{min-width:0}',
+            '.sub-store-page .sub-store-maintenance-copy p{margin:.45em 0 0}',
+            '.sub-store-page .sub-store-maintenance-status{color:#7b8190}',
+            '.sub-store-page .sub-store-maintenance-card .cbi-button{flex:none}',
+            '.sub-store-page .sub-store-log-panel{box-sizing:border-box;width:100%;max-width:1280px;margin:0 auto;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:8px;background:var(--background-color-high,#fff)}',
+            '.sub-store-page .sub-store-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75em;flex-wrap:wrap}',
+            '.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}',
+            '.sub-store-page .sub-store-log-tabs{padding:.25em;border-radius:6px;background:var(--background-color-low,#f5f5f5)}',
+            '.sub-store-page .sub-store-log-heading{display:flex;align-items:baseline;gap:.65em;flex-wrap:wrap;margin:.85em 0 .4em}',
+            '.sub-store-page .sub-store-log-heading .cbi-value-description{margin:0}',
+            '.sub-store-page .sub-store-log-output{box-sizing:border-box;width:100%;height:24em;max-height:55vh;overflow:auto;overscroll-behavior:contain;white-space:pre;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:6px;background:var(--background-color-low,#f7f7f7);font-family:monospace;font-size:.9em;line-height:1.5}',
+            '@media(prefers-color-scheme:dark){.sub-store-page .sub-store-status.is-running{color:#b5dfbd;background:#23422b;border-color:#386b44}.sub-store-page .sub-store-status.is-warning{color:#eed694;background:#463a21;border-color:#76602e}}',
+            '@media(max-width:700px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-maintenance-info,.sub-store-page .sub-store-maintenance-actions{grid-template-columns:minmax(0,1fr)}.sub-store-page .sub-store-maintenance-card{align-items:stretch;flex-direction:column}.sub-store-page .sub-store-maintenance-card .cbi-button{align-self:flex-start}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-tabs .cbi-button{flex:1}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
+        ].join('');
         return E('div', { 'class': 'sub-store-page' }, [
-            E('style', {}, ['.sub-store-page .sub-store-overview{border-radius:12px;padding:1.25em;margin-bottom:1.2em}.sub-store-page .cbi-button{margin-bottom:.25em}.sub-store-page pre{font-size:inherit}.sub-store-page input[readonly]{box-sizing:border-box}.sub-store-page .sub-store-status{display:inline-flex;align-items:center;gap:.45em;max-width:100%;box-sizing:border-box;margin:.25em 0 .75em;padding:.38em .7em;border:1px solid;border-radius:4px;font-weight:600;line-height:1.4}.sub-store-page .sub-store-status.is-running{color:#256b36;background:#eaf5ec;border-color:#bfdfc5}.sub-store-page .sub-store-status.is-running:before{content:"";width:.5em;height:.5em;flex:none;border-radius:50%;background:#32934b}.sub-store-page .sub-store-status.is-warning{color:#765411;background:#fff5dc;border-color:#ead38e}.sub-store-page .sub-store-open-button{text-transform:none}.sub-store-page .sub-store-primary-actions,.sub-store-page .sub-store-service-actions{display:flex;align-items:center;gap:.5em;flex-wrap:wrap;margin:.75em 0}.sub-store-page .sub-store-service-actions{padding-top:.7em;border-top:1px solid var(--border-color,#ddd)}.sub-store-page .sub-store-action-label,.sub-store-page .sub-store-address-label{font-weight:600}.sub-store-page .sub-store-address-label{display:block;margin:.9em 0 .35em}.sub-store-page .sub-store-log-panel{border:1px solid var(--border-color,#bbb);border-radius:8px;padding:.85em;background:var(--background-color-high,#fff)}.sub-store-page .sub-store-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75em;flex-wrap:wrap}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}.sub-store-page .sub-store-log-tabs{padding:.25em;border-radius:6px;background:var(--background-color-low,#f5f5f5)}.sub-store-page .sub-store-log-heading{display:flex;align-items:baseline;gap:.65em;flex-wrap:wrap;margin:.85em 0 .4em}.sub-store-page .sub-store-log-heading .cbi-value-description{margin:0}.sub-store-page .sub-store-log-output{box-sizing:border-box;width:100%;height:24em;max-height:55vh;overflow:auto;overscroll-behavior:contain;white-space:pre;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:6px;background:var(--background-color-low,#f7f7f7);font-family:monospace;font-size:.9em;line-height:1.5}@media(prefers-color-scheme:dark){.sub-store-page .sub-store-status.is-running{color:#b5dfbd;background:#23422b;border-color:#386b44}.sub-store-page .sub-store-status.is-warning{color:#eed694;background:#463a21;border-color:#76602e}}@media(max-width:600px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-tabs .cbi-button{flex:1}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}']),
+            E('style', {}, [pageStyles]),
             E('h2', {}, ['sub-store']), statusSection, formNode]);
     }
 });

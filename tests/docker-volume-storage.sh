@@ -25,6 +25,7 @@ MOCK_BACKEND_MAPPING=""
 MOCK_CONTAINER_DATA_PATH=""
 DOCKER_ARGS="$TEST_DIR/docker-args"
 DOCKER_LOG="$TEST_DIR/docker-log"
+MOCK_APP_LOGS="$TEST_DIR/app.log"
 
 uci() {
     case "$*" in
@@ -70,10 +71,18 @@ docker() {
             ;;
         run) printf '%s\n' "$@" > "$DOCKER_ARGS"; printf '%s\n' mock-container ;;
         exec) return 0 ;;
+        logs) cat "$MOCK_APP_LOGS" ;;
         rm|rename|start) return 0 ;;
         *) return 1 ;;
     esac
 }
+
+cat > "$MOCK_APP_LOGS" <<'EOF'
+Sub-Store -- v2.42.3
+startup output
+Sub-Store -- v2.42.4
+EOF
+[ "$(show_app_version)" = "2.42.4" ]
 
 valid_config
 if (BACKEND_PORT=8081; valid_config) >/dev/null 2>&1; then
