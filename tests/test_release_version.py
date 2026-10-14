@@ -9,11 +9,17 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from release import body_with_run_id, pending_candidates, prepare, publish, verify_files  # noqa: E402
+from release import body_with_run_id, get_release_by_tag, pending_candidates, prepare, publish, verify_files  # noqa: E402
 from release_version import next_version, parse_tag, parse_version  # noqa: E402
 
 
 class ReleaseVersionTests(unittest.TestCase):
+    def test_release_lookup_finds_draft_by_tag_from_release_list(self):
+        draft = {"tag_name": "v0.0.1", "draft": True, "target_commitish": "source-sha"}
+        with patch("release.list_api_pages", return_value=[{"tag_name": "v0.0.2"}, draft]) as list_mock:
+            self.assertEqual(get_release_by_tag("owner/repo", "v0.0.1"), draft)
+        list_mock.assert_called_once_with("repos/owner/repo/releases?per_page=100")
+
     def test_patch_minor_and_major_bumps(self):
         self.assertEqual(next_version("0.0.0"), "0.0.1")
         self.assertEqual(next_version("1.9.99", "patch"), "1.9.100")
@@ -240,7 +246,7 @@ class ReleaseVersionTests(unittest.TestCase):
             "RUN_IDS": "100",
             "GITHUB_RUN_ID": "100",
         }), \
-             patch("release.command", return_value=json.dumps(release_data)), \
+             patch("release.list_api_pages", return_value=[release_data]), \
              patch("release.published_release_is_complete", return_value=True), \
              patch("release.verify_files") as verify_mock:
             publish()

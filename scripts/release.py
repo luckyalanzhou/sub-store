@@ -52,6 +52,14 @@ def list_api_pages(path: str) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.splitlines() if line.strip()]
 
 
+def get_release_by_tag(repo: str, tag: str) -> dict[str, Any]:
+    releases = list_api_pages(f"repos/{repo}/releases?per_page=100")
+    for release in releases:
+        if release.get("tag_name") == tag:
+            return release
+    raise ReleaseError(f"Release {tag} was not found")
+
+
 def release_ids(body: str) -> list[str]:
     match = RUN_MARKER_RE.search(body or "")
     if not match:
@@ -354,7 +362,7 @@ def publish() -> None:
     package_path = Path("dist") / package_name
     checksum_path = Path("dist") / checksum_name
 
-    existing = json.loads(command(["gh", "api", f"repos/{repo}/releases/tags/{env['TAG']}"]))
+    existing = get_release_by_tag(repo, env["TAG"])
     if not existing.get("draft", False):
         if published_release_is_complete(repo, existing, version):
             if env["GITHUB_RUN_ID"] in release_ids(existing.get("body", "")):
@@ -394,7 +402,7 @@ def publish() -> None:
         "--notes-file", "dist/release-notes.md",
     ])
 
-    release = json.loads(command(["gh", "api", f"repos/{repo}/releases/tags/{env['TAG']}"]))
+    release = get_release_by_tag(repo, env["TAG"])
     if not release.get("draft", False):
         raise ReleaseError("Release left draft state before asset verification")
     assets = asset_map(release)
@@ -415,7 +423,7 @@ def publish() -> None:
             raise ReleaseError("Uploaded installer and checksum failed remote SHA-256 verification")
 
     command(["gh", "release", "edit", env["TAG"], "--repo", repo, "--draft=false"])
-    final_release = json.loads(command(["gh", "api", f"repos/{repo}/releases/tags/{env['TAG']}"]))
+    final_release = get_release_by_tag(repo, env["TAG"])
     if final_release.get("draft", True) or not final_release.get("published_at"):
         raise ReleaseError("Release assets verified, but GitHub did not confirm publication")
     final_assets = asset_map(final_release)
