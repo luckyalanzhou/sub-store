@@ -5,8 +5,8 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 PAYLOAD="$ROOT/run/payload"
 VERSION="${VERSION:-}"
 
-printf '%s\n' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
-    echo "VERSION must use semantic version form x.y.z" >&2
+printf '%s\n' "$VERSION" | grep -Eq '^[0-9]\.[0-9]\.(0|[1-9][0-9]?)$' || {
+    echo "VERSION must use single-digit major/minor and a patch from 0 to 99" >&2
     exit 1
 }
 

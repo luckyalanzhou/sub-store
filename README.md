@@ -21,7 +21,13 @@ The installer targets iStoreOS/OpenWrt 24.10.x with `opkg` and LuCI. It installs
 
 ## Build and download
 
-GitHub Actions builds the Makeself `.run` package on every push to `main`; pull requests to `main` run the same checks without publishing a Release. Builds can also be started manually from the repository's **Actions → Build sub-store installer → Run workflow** page. With no version tag, the first published package is `0.0.1`; afterward, each commit after the latest version tag increments the patch version. A push to `main` builds and publishes that version as a GitHub Release; the release step uses the repository Actions secret `RELEASE_PUBLISH_TOKEN`. Manually rerunning the same commit does not increment the version. CI checks POSIX shell and OpenWrt BusyBox `ash`, image rollback, volume migration, LuCI and frontend behavior, package integrity, and a weekly smoke test of the official Docker image. The tests do not replace installation on a real iStoreOS device.
+正式发布只能从 **Actions → Build sub-store installer → Run workflow** 手动启动，且只能选择 `main`。普通代码推送不会构建或发布正式安装包；每周计划任务只检查官方 Docker 镜像。
+
+版本格式为 `主版本.次版本.Patch`，例如 `0.0.1`。基准版本是 `0.0.0`，首次发布为 `0.0.1`；主、次版本各为 `0–9`，Patch 为 `0–99` 且不补前导零。Patch 到 `99` 后进位，例如 `0.0.99 → 0.1.0`、`0.9.99 → 1.0.0`。最高版本 `9.9.99` 后停止发布。
+
+启动发布会先建立草稿并分配版本。失败后重跑或再次启动会继续该草稿版本；完整发布过的版本不会覆盖，下次发布再递增。安装包和 `.sha256` 文件上传后会从 Release 下载并校验，成功后才公开 Release。发布使用仓库 Actions Secret `RELEASE_PUBLISH_TOKEN`，Fine-grained PAT 需有 `Contents: Read and write` 权限。
+
+发布前会检查 POSIX shell、OpenWrt BusyBox `ash`、LuCI、前端、Docker 容器及安装包。实际 iStoreOS 安装流程仍需在设备上验证。
 
 To install, download the versioned `.run` asset from a Release, then use **iStore → 手动安装**. For a terminal install, upload the file to the router and set `RUN_FILE` to the exact filename shown in the Release:
 

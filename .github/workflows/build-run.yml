@@ -1,15 +1,13 @@
 name: Build sub-store installer
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
   schedule:
     - cron: '17 3 * * 1'
+
+concurrency:
+  group: sub-store-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -57,44 +55,43 @@ jobs:
           docker logs --tail 100 sub-store-smoke
           exit 1
 
-  build:
+  prepare-release:
+    name: Allocate or resume release version
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     outputs:
-      version: ${{ steps.version.outputs.value }}
+      version: ${{ steps.prepare.outputs.version }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      previous_tag: ${{ steps.prepare.outputs.previous_tag }}
+      run_ids: ${{ steps.prepare.outputs.run_ids }}
+      already_complete: ${{ steps.prepare.outputs.already_complete }}
     steps:
-      - name: Check out source
+      - name: Check out the selected main revision
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Calculate package version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_REF" =~ ^refs/tags/v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            tag="$GITHUB_REF_NAME"
-            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-          else
-            if tag=$(git describe --tags --match 'v[0-9]*' --abbrev=0 "$GITHUB_SHA" 2>/dev/null); then
-              if [[ ! "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-                echo "Latest version tag must use vMAJOR.MINOR.PATCH: $tag" >&2
-                exit 1
-              fi
-              major="${BASH_REMATCH[1]}"
-              minor="${BASH_REMATCH[2]}"
-              base_patch="${BASH_REMATCH[3]}"
-              commits_since_release=$(git rev-list --count "$tag..$GITHUB_SHA")
-              patch=$((base_patch + commits_since_release))
-              version="$major.$minor.$patch"
-            else
-              tag=""
-              version="0.0.1"
-            fi
-          fi
-          echo "value=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Building sub-store iStoreOS package version $version"
+      - name: Create or resume the draft release
+        id: prepare
+        run: python3 scripts/release.py prepare
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+
+  build:
+    name: Build and verify release assets
+    if: github.event_name == 'workflow_dispatch' && needs.prepare-release.outputs.already_complete != 'true'
+    needs: [docker-smoke, prepare-release]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the allocated release source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare-release.outputs.source_sha }}
+
+      - name: Test release version rules
+        run: python3 -m unittest discover -s tests -p 'test_release_version.py'
 
       - name: Generate numbered release notes
         shell: bash
@@ -107,9 +104,9 @@ jobs:
             printf '## 优化内容\n\n'
             index=0
             if [[ -n "$PREVIOUS_TAG" ]]; then
-              commits=$(git rev-list --reverse "$PREVIOUS_TAG..$GITHUB_SHA")
+              commits=$(git rev-list --reverse "$PREVIOUS_TAG..$SOURCE_SHA")
             else
-              commits=$(git rev-list --reverse "$GITHUB_SHA")
+              commits=$(git rev-list --reverse "$SOURCE_SHA")
             fi
             while IFS= read -r commit; do
               subject="$(git show -s --format=%s "$commit")"
@@ -125,13 +122,20 @@ jobs:
               printf '\n'
             done <<< "$commits"
             if ((index == 0)); then
-              printf '1. 首次发布：提供 sub-store iStoreOS 手动安装包。\n'
+              if [[ -z "$PREVIOUS_TAG" ]]; then
+                printf '1. 首次发布：提供 sub-store iStoreOS 手动安装包。\n'
+              else
+                printf '1. 本次继续完成已分配版本的发布。\n'
+              fi
             fi
+            printf '\n<!-- sub-store-run-ids: %s -->\n' "$RUN_IDS"
           } > dist/release-notes.md
           cat dist/release-notes.md
         env:
-          VERSION: ${{ steps.version.outputs.value }}
-          PREVIOUS_TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+          SOURCE_SHA: ${{ needs.prepare-release.outputs.source_sha }}
+          PREVIOUS_TAG: ${{ needs.prepare-release.outputs.previous_tag }}
+          RUN_IDS: ${{ needs.prepare-release.outputs.run_ids }}
 
       - name: Check shell syntax
         shell: bash
@@ -214,14 +218,27 @@ jobs:
       - name: Build installer
         run: sh scripts/build-run.sh
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+
+      - name: Create and verify SHA-256 file
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="sub-store-${VERSION}.run"
+          (cd dist && sha256sum "$package" > "${package}.sha256")
+          (cd dist && sha256sum --check --strict "${package}.sha256")
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
 
       - name: Verify package and self-extractor
         shell: bash
         run: |
           set -euo pipefail
           package="dist/sub-store-${VERSION}.run"
+          checksum="${package}.sha256"
           test -s "$package"
+          test -s "$checksum"
+          (cd dist && sha256sum --check --strict "$(basename "$checksum")")
 
           "$package" --check
           extracted="$(mktemp -d)"
@@ -238,39 +255,46 @@ jobs:
           test "$status" -ne 0
           grep -Fq 'Run the .run installer as root.' <<<"$output"
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          VERSION: ${{ needs.prepare-release.outputs.version }}
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v7
         with:
-          name: sub-store-${{ steps.version.outputs.value }}
+          name: sub-store-${{ needs.prepare-release.outputs.version }}
           path: |
-            dist/sub-store-${{ steps.version.outputs.value }}.run
+            dist/sub-store-${{ needs.prepare-release.outputs.version }}.run
+            dist/sub-store-${{ needs.prepare-release.outputs.version }}.run.sha256
             dist/release-notes.md
           if-no-files-found: error
           retention-days: 30
+          overwrite: true
 
   release:
     name: Publish GitHub Release
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build, prepare-release]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
-      - name: Download installer artifact
-        uses: actions/download-artifact@v8
+      - name: Check out release workflow helper
+        uses: actions/checkout@v7
         with:
-          name: sub-store-${{ needs.build.outputs.version }}
+          fetch-depth: 1
+          ref: ${{ needs.prepare-release.outputs.source_sha }}
+
+      - name: Download versioned release assets
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: sub-store-${{ needs.prepare-release.outputs.version }}
           path: dist
 
-      - name: Create release and attach installer
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: v${{ needs.build.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          name: sub-store v${{ needs.build.outputs.version }}
-          body_path: dist/release-notes.md
-          files: dist/sub-store-${{ needs.build.outputs.version }}.run
-          fail_on_unmatched_files: true
-          token: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+      - name: Upload, verify, and publish the draft release
+        run: python3 scripts/release.py publish
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+          TAG: ${{ needs.prepare-release.outputs.tag }}
+          RUN_IDS: ${{ needs.prepare-release.outputs.run_ids }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
