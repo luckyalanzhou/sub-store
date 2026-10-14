@@ -73,6 +73,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.doesNotMatch(source, /完整地址含 API 参数/);
     assert.doesNotMatch(source, /sub-store-maintenance-(?:panel|card|row)/);
     assert.doesNotMatch(source, /#cbi-sub-store-main-_maintenance/);
+    assert.match(source, /#cbi-sub-store-main-_image,.sub-store-page #cbi-sub-store-main-_app_version,.sub-store-page #cbi-sub-store-main-_created\{align-items:center\}/);
     assert.match(source, /#cbi-sub-store-main-_logs/);
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBox.textContent, 'runtime log');

@@ -500,6 +500,7 @@ return view.extend({
             '.sub-store-page .sub-store-service-actions{padding-top:.7em;border-top:1px solid var(--border-color,#ddd)}',
             '.sub-store-page .sub-store-action-label,.sub-store-page .sub-store-address-label{font-weight:600}',
             '.sub-store-page .sub-store-address-label{display:block;margin:.9em 0 .35em}',
+            '.sub-store-page #cbi-sub-store-main-_image,.sub-store-page #cbi-sub-store-main-_app_version,.sub-store-page #cbi-sub-store-main-_created{align-items:center}',
             '.sub-store-page #cbi-sub-store-main-_logs{display:block!important}',
             '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-title{display:none!important}',
             '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{display:block!important;width:100%!important;max-width:none!important;margin:0!important}',
