@@ -55,6 +55,8 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.stopButton.disabled, false);
     assert.equal(t.view.restartButton.disabled, false);
     assert.equal(t.view.appVersion.textContent, '2.42.3');
+    assert.equal(t.view.image.textContent, '容器镜像未就绪');
+    assert.equal(t.view.imageDigest.hidden, true);
     assert.equal(page.children[2].children[0].children[0], '服务概览');
     assert.match(source, /sub-store-status\{display:inline-flex/);
     assert.match(source, /sub-store-status\{[^}]*border-radius:4px/);
@@ -65,6 +67,9 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.options._updates, undefined);
     assert.equal(t.options._rotate, undefined);
     assert.match(t.view.maintenancePanel.class, /sub-store-maintenance-panel/);
+    assert.doesNotMatch(source, /完整地址含 API 参数/);
+    assert.doesNotMatch(source, /sub-store-maintenance-card/);
+    assert.match(source, /sub-store-maintenance-row/);
     assert.match(source, /#cbi-sub-store-main-_maintenance/);
     assert.match(source, /#cbi-sub-store-main-_logs/);
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
@@ -91,7 +96,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.notEqual(t.options.access_host.validate('main', 'http://router:3001'), true);
     assert.equal(t.options.public_url.validate('main', 'https://sub.example.test'), true);
     assert.notEqual(t.options.public_url.validate('main', 'https://bad..example.test'), true);
-    assert.match(source, /同时检查插件和官方镜像；有更新时自动安装并保留数据/);
+    assert.match(source, /检查插件与官方镜像/);
 });
 test('service actions follow the current container state', async () => {
     const t = setup(); await t.view.render(await t.view.load());
@@ -107,12 +112,8 @@ test('service actions follow the current container state', async () => {
     assert.equal(t.view.stopButton.disabled, true);
     assert.equal(t.view.restartButton.disabled, true);
 });
-test('recent operation labels are human-readable and container time is localized', () => {
+test('container time is localized', () => {
     const { view } = setup();
-    assert.equal(view.formatOperation('操作成功：update-all；完成时间：2026-10-14 22:38:20'),
-        '操作成功：检查并更新；完成时间：2026-10-14 22:38:20');
-    assert.equal(view.formatOperation('正在执行：rotate-key；开始时间：2026-10-14 22:38:20'),
-        '正在执行：重新生成 API 密钥；开始时间：2026-10-14 22:38:20');
     assert.match(view.formatLocalDate('2026-10-14T14:37:35.576Z'), /^2026-10-14 \d{2}:37:35$/);
 });
 test('unhealthy container is visible and completed work refreshes details', async () => {
@@ -157,7 +158,7 @@ test('combined update verifies a newly installed plugin and shows a refresh coun
         Object.assign(t.state, { version: '0.0.22', plugin_latest_version: '0.0.22', plugin_update_available: false,
             action: 'update-all', phase: 'failed', busy: false });
         await t.view.refresh('summary');
-        assert.equal(t.view.updateStatus.textContent, '插件已更新到 0.0.22；5 秒后刷新页面');
+        assert.equal(t.view.updateStatus.textContent, '插件已更新至 0.0.22 · 5 秒后刷新');
         for (let i = 0; i < 5; i++) timers[0]();
         assert.deepEqual(calls, ['reload']);
     } finally {
@@ -179,7 +180,7 @@ test('image-only update does not reload the LuCI page', async () => {
             action: 'update-all', phase: 'success', busy: false });
         await t.view.refresh('summary');
         assert.equal(timers.length, 0);
-        assert.equal(t.view.updateStatus.textContent, '检查完成，插件已是最新版本 0.0.21');
+        assert.equal(t.view.updateStatus.textContent, '检查完成 · 插件 0.0.21');
     } finally {
         if (previousWindow === undefined) delete global.window;
         else global.window = previousWindow;
@@ -228,14 +229,14 @@ test('slow enqueue returns immediately and polling confirms the queued task', as
     await t.view.run('update-all');
     assert.equal(t.view.localBusy, true);
     assert.equal(t.view.enqueuePendingAction, 'update-all');
-    assert.equal(t.view.updateStatus.textContent, '正在提交检查请求…');
+    assert.equal(t.view.updateStatus.textContent, '正在提交…');
 
     Object.assign(t.state, { busy: true, action: 'update-all', phase: 'running', container: 'maintenance',
         operation: '正在执行：update-all；开始时间：2026-10-14 12:00:00' });
     await t.polls[0]();
     assert.equal(t.view.localBusy, false);
     assert.equal(t.view.enqueuePendingAction, null);
-    assert.equal(t.view.updateStatus.textContent, '正在检查并更新…');
+    assert.equal(t.view.updateStatus.textContent, '正在检查…');
 
     resolveEnqueue({ code: 0, stdout: 'accepted' });
     await t.view.enqueueTask;
@@ -300,17 +301,17 @@ test('one update button checks the plugin and Docker image, then updates newer v
     const t = setup(); await t.view.render(await t.view.load());
     t.state.version = '0.0.21';
     assert.equal(t.view.updateButton.children[0], '检查更新');
-    assert.equal(t.view.updateStatus.textContent, '同时检查插件和官方镜像；有更新时自动安装并保留数据。');
+    assert.equal(t.view.updateStatus.textContent, '检查插件与官方镜像');
     t.state.plugin_latest_version = '0.0.22';
     t.state.plugin_update_available = true;
     await t.view.refresh('details');
-    assert.equal(t.view.updateStatus.textContent, '插件有新版本 0.0.22；点击“检查更新”自动安装。');
+    assert.equal(t.view.updateStatus.textContent, '发现插件 0.0.22');
     await t.view.updateButton.click();
     const queued = t.calls.filter(call => call[0].endsWith('job.sh')).map(call => call[1][1]);
     assert.deepEqual(queued, ['update-all']);
-    assert.match(source, /同时检查插件和官方镜像；有更新时自动安装并保留数据/);
+    assert.match(source, /检查插件与官方镜像/);
     assert.doesNotMatch(source, /检查插件更新|下载并安装|更新 Sub-Store 镜像/);
-    assert.match(source, /重新生成 API 密钥/);
+    assert.match(source, /重新生成 API 访问密钥/);
     const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');
     const combinedAction = controller.slice(controller.indexOf('    update-all)'), controller.indexOf('    check-plugin-update)'));
     assert.match(combinedAction, /\$0" update/);

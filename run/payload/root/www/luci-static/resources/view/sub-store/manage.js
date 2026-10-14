@@ -35,20 +35,9 @@ function compareVersions(left, right) {
     }
     return 0;
 }
-const operationLabels = {
-    start: '启动服务', stop: '停止服务', restart: '重启服务', update: '更新镜像',
-    'update-all': '检查并更新', 'rotate-key': '重新生成 API 密钥', check: '检查服务',
-    'clear-logs': '清空维护日志'
-};
-
 return view.extend({
     validCron: validCron,
     compareVersions: compareVersions,
-    formatOperation: function(value) {
-        const match = /^(正在执行|操作成功|操作失败)：([^；]+)(.*)$/.exec(value || '');
-        if (!match) return value || '尚无维护操作';
-        return match[1] + '：' + (operationLabels[match[2]] || match[2]) + match[3];
-    },
     formatLocalDate: function(value) {
         const date = new Date(value);
         if (!value || Number.isNaN(date.getTime())) return value || '';
@@ -166,9 +155,12 @@ return view.extend({
         this.address.value = s.url || '';
         this.open.href = s.url || '#';
         this.open.hidden = !s.url || s.container !== 'running';
-        this.operation.textContent = '最近操作：' + this.formatOperation(s.operation);
         this.storage.textContent = s.storage || '实际路径暂不可用';
-        this.image.textContent = s.image || '容器镜像未就绪';
+        const image = String(s.image || '').split(/\s+\/\s+/, 2);
+        this.image.textContent = image[0] || '容器镜像未就绪';
+        this.imageDigest.textContent = image[1] ? image[1].slice(0, 19) + '…' : '';
+        this.imageDigest.title = image[1] || '';
+        this.imageDigest.hidden = !image[1];
         this.appVersion.textContent = s.app_version || '容器日志未提供版本号';
         this.created.textContent = this.formatLocalDate(s.created) || '容器尚未创建';
         this.api.value = s.api_url || '';
@@ -184,25 +176,25 @@ return view.extend({
         const comparison = compareVersions(latest, s.version || '');
         const available = s.plugin_update_available === true || s.plugin_update_available === '1';
         if (this.pluginReloadCountdown !== undefined)
-            this.updateStatus.textContent = '插件已更新到 ' + this.pluginReloadVersion + '；' + this.pluginReloadCountdown + ' 秒后刷新页面';
+            this.updateStatus.textContent = '插件已更新至 ' + this.pluginReloadVersion + ' · ' + this.pluginReloadCountdown + ' 秒后刷新';
         else if (this.enqueuePendingAction === 'update-all')
-            this.updateStatus.textContent = '正在提交检查请求…';
+            this.updateStatus.textContent = '正在提交…';
         else if (this.updateAction === 'update-all')
-            this.updateStatus.textContent = '正在检查并更新…';
+            this.updateStatus.textContent = '正在检查…';
         else if (s.action === 'update-all' && s.phase === 'failed')
-            this.updateStatus.textContent = '更新未完全成功，请查看维护日志。';
+            this.updateStatus.textContent = '更新失败 · 查看维护日志';
         else if (s.action === 'update-all' && s.phase === 'success' && latest && comparison === 0)
-            this.updateStatus.textContent = '检查完成，插件已是最新版本 ' + latest;
+            this.updateStatus.textContent = '检查完成 · 插件 ' + latest;
         else if (s.action === 'update-all' && s.phase === 'success')
-            this.updateStatus.textContent = '检查更新完成。';
+            this.updateStatus.textContent = '检查完成';
         else if (latest && comparison === 0)
-            this.updateStatus.textContent = '插件当前版本：' + latest;
+            this.updateStatus.textContent = '插件 ' + latest;
         else if (available && comparison === 1)
-            this.updateStatus.textContent = '插件有新版本 ' + latest + '；点击“检查更新”自动安装。';
+            this.updateStatus.textContent = '发现插件 ' + latest;
         else if (latest && comparison === -1)
-            this.updateStatus.textContent = '插件当前版本：' + (s.version || '未知');
+            this.updateStatus.textContent = '插件 ' + (s.version || '未知');
         else
-            this.updateStatus.textContent = '同时检查插件和官方镜像；有更新时自动安装并保留数据。';
+            this.updateStatus.textContent = '检查插件与官方镜像';
     },
     beginUpdateReloadCountdown: function(version) {
         if (this.pluginReloadTimer || typeof window === 'undefined' || !window.setInterval) return;
@@ -357,7 +349,6 @@ return view.extend({
         this.buttons = [];
         this.status = E('p');
         this.version = E('p');
-        this.operation = E('p', { 'aria-live': 'polite' });
         this.address = E('input', { id: 'sub-store-management-address', 'class': 'cbi-input-text', readonly: true, style: 'width:100%',
             'aria-label': '访问地址' });
         this.open = E('a', { 'class': 'cbi-button cbi-button-positive sub-store-open-button', target: '_blank', rel: 'noopener noreferrer' }, ['点击打开 sub-store']);
@@ -379,9 +370,7 @@ return view.extend({
                 E('span', { 'class': 'sub-store-action-label' }, ['服务控制']),
                 this.startButton, this.stopButton, this.restartButton
             ]),
-            E('label', { 'class': 'sub-store-address-label', for: 'sub-store-management-address' }, ['访问地址']), this.address,
-            E('p', { 'class': 'cbi-value-description' }, ['完整地址含 API 参数，请直接复制使用。']),
-            this.operation
+            E('label', { 'class': 'sub-store-address-label', for: 'sub-store-management-address' }, ['访问地址']), this.address
         ]);
         const m = this.map = new form.Map('sub-store', null, '管理官方 Sub-Store Docker；订阅与配置请在管理页面操作。');
         const s = m.section(form.NamedSection, 'main', 'settings');
@@ -428,6 +417,7 @@ return view.extend({
         this.api = E('input', { readonly: true, style: 'width:100%', 'aria-label': '后端直连地址' });
         this.storage = E('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' });
         this.image = E('code');
+        this.imageDigest = E('small', { 'class': 'sub-store-image-digest' });
         this.appVersion = E('span');
         this.created = E('span');
         this.updateStatus = E('span', { 'aria-live': 'polite' }, ['尚未检查更新']);
@@ -473,33 +463,28 @@ return view.extend({
         const rotate = E('button', { 'class': 'cbi-button cbi-button-negative',
             click: ui.createHandlerFn(this, function() {
                 return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');
-            }) }, ['重新生成 API 密钥']);
+            }) }, ['重新生成']);
         this.buttons.push(rotate);
-        const metric = (label, value) => E('div', { 'class': 'sub-store-maintenance-metric' }, [
+        const summaryItem = (label, value) => E('div', { 'class': 'sub-store-maintenance-summary-item' }, [
             E('span', { 'class': 'sub-store-maintenance-label' }, [label]), value
         ]);
-        const updateCard = E('div', { 'class': 'sub-store-maintenance-card' }, [
-            E('div', { 'class': 'sub-store-maintenance-copy' }, [
-                E('strong', {}, ['更新']),
-                E('p', {}, ['检查插件和官方镜像；有更新时自动安装并保留数据。']),
-                E('p', { 'class': 'sub-store-maintenance-status' }, [this.updateStatus])
-            ]),
+        const updateRow = E('div', { 'class': 'sub-store-maintenance-row' }, [
+            E('strong', {}, ['插件与镜像']),
+            E('span', { 'class': 'sub-store-maintenance-status' }, [this.updateStatus]),
             this.updateButton
         ]);
-        const keyCard = E('div', { 'class': 'sub-store-maintenance-card' }, [
-            E('div', { 'class': 'sub-store-maintenance-copy' }, [
-                E('strong', {}, ['API 密钥']),
-                E('p', {}, ['管理链接泄露时重新生成；旧链接会失效。'])
-            ]),
+        const keyRow = E('div', { 'class': 'sub-store-maintenance-row' }, [
+            E('strong', {}, ['API 密钥']),
+            E('span', { 'class': 'sub-store-maintenance-status' }, ['泄露后更换，旧链接失效']),
             rotate
         ]);
         this.maintenancePanel = E('div', { 'class': 'sub-store-maintenance-panel' }, [
-            E('div', { 'class': 'sub-store-maintenance-info' }, [
-                metric('Docker 镜像', this.image),
-                metric('Sub-Store 版本', this.appVersion),
-                metric('容器创建时间', this.created)
+            E('div', { 'class': 'sub-store-maintenance-summary' }, [
+                summaryItem('Docker 镜像', E('span', { 'class': 'sub-store-image-value' }, [this.image, this.imageDigest])),
+                summaryItem('Sub-Store', this.appVersion),
+                summaryItem('创建时间', this.created)
             ]),
-            E('div', { 'class': 'sub-store-maintenance-actions' }, [updateCard, keyCard])
+            E('div', { 'class': 'sub-store-maintenance-actions' }, [updateRow, keyRow])
         ]);
         display('maintenance', '_maintenance', '维护操作', this.maintenancePanel);
         display('logs', '_logs', '', logPanel);
@@ -526,17 +511,19 @@ return view.extend({
             '.sub-store-page #cbi-sub-store-main-_maintenance,.sub-store-page #cbi-sub-store-main-_logs{display:block!important}',
             '.sub-store-page #cbi-sub-store-main-_maintenance>.cbi-value-title,.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-title{display:none!important}',
             '.sub-store-page #cbi-sub-store-main-_maintenance>.cbi-value-field,.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{display:block!important;width:100%!important;max-width:none!important;margin:0!important}',
-            '.sub-store-page .sub-store-maintenance-panel{display:grid;gap:1em;width:100%;max-width:1080px;margin:0 auto}',
-            '.sub-store-page .sub-store-maintenance-info{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75em}',
-            '.sub-store-page .sub-store-maintenance-metric{min-width:0;padding:.8em 1em;border:1px solid var(--border-color,#ddd);border-radius:8px;background:var(--background-color-low,#f7f7f7)}',
-            '.sub-store-page .sub-store-maintenance-label{display:block;margin-bottom:.35em;color:#7b8190;font-size:.9em}',
-            '.sub-store-page .sub-store-maintenance-metric code{display:block;overflow-wrap:anywhere;white-space:normal}',
-            '.sub-store-page .sub-store-maintenance-actions{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:.75em}',
-            '.sub-store-page .sub-store-maintenance-card{display:flex;min-width:0;align-items:center;justify-content:space-between;gap:1em;padding:1em;border:1px solid var(--border-color,#ddd);border-radius:8px;background:var(--background-color-high,#fff)}',
-            '.sub-store-page .sub-store-maintenance-copy{min-width:0}',
-            '.sub-store-page .sub-store-maintenance-copy p{margin:.45em 0 0}',
+            '.sub-store-page .sub-store-maintenance-panel{display:grid;gap:.75em;width:100%;max-width:1080px;margin:0 auto}',
+            '.sub-store-page .sub-store-maintenance-summary{display:grid;grid-template-columns:minmax(0,2fr) minmax(8em,.7fr) minmax(12em,1fr);overflow:hidden;border:1px solid var(--border-color,#ddd);border-radius:8px;background:var(--background-color-high,#fff)}',
+            '.sub-store-page .sub-store-maintenance-summary-item{min-width:0;padding:.75em 1em;border-right:1px solid var(--border-color,#ddd)}',
+            '.sub-store-page .sub-store-maintenance-summary-item:last-child{border-right:0}',
+            '.sub-store-page .sub-store-maintenance-label{display:block;margin-bottom:.25em;color:#7b8190;font-size:.85em}',
+            '.sub-store-page .sub-store-image-value{display:flex;min-width:0;align-items:baseline;gap:.65em;flex-wrap:wrap}',
+            '.sub-store-page .sub-store-image-value code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+            '.sub-store-page .sub-store-image-digest{color:#7b8190;font-family:monospace}',
+            '.sub-store-page .sub-store-maintenance-actions{overflow:hidden;border:1px solid var(--border-color,#ddd);border-radius:8px;background:var(--background-color-high,#fff)}',
+            '.sub-store-page .sub-store-maintenance-row{display:grid;grid-template-columns:minmax(7em,.6fr) minmax(0,2fr) auto;align-items:center;gap:1em;padding:.8em 1em;border-bottom:1px solid var(--border-color,#ddd)}',
+            '.sub-store-page .sub-store-maintenance-row:last-child{border-bottom:0}',
             '.sub-store-page .sub-store-maintenance-status{color:#7b8190}',
-            '.sub-store-page .sub-store-maintenance-card .cbi-button{flex:none}',
+            '.sub-store-page .sub-store-maintenance-row .cbi-button{margin:0}',
             '.sub-store-page .sub-store-log-panel{box-sizing:border-box;width:100%;max-width:1280px;margin:0 auto;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:8px;background:var(--background-color-high,#fff)}',
             '.sub-store-page .sub-store-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75em;flex-wrap:wrap}',
             '.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}',
@@ -545,7 +532,7 @@ return view.extend({
             '.sub-store-page .sub-store-log-heading .cbi-value-description{margin:0}',
             '.sub-store-page .sub-store-log-output{box-sizing:border-box;width:100%;height:24em;max-height:55vh;overflow:auto;overscroll-behavior:contain;white-space:pre;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:6px;background:var(--background-color-low,#f7f7f7);font-family:monospace;font-size:.9em;line-height:1.5}',
             '@media(prefers-color-scheme:dark){.sub-store-page .sub-store-status.is-running{color:#b5dfbd;background:#23422b;border-color:#386b44}.sub-store-page .sub-store-status.is-warning{color:#eed694;background:#463a21;border-color:#76602e}}',
-            '@media(max-width:700px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-maintenance-info,.sub-store-page .sub-store-maintenance-actions{grid-template-columns:minmax(0,1fr)}.sub-store-page .sub-store-maintenance-card{align-items:stretch;flex-direction:column}.sub-store-page .sub-store-maintenance-card .cbi-button{align-self:flex-start}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-tabs .cbi-button{flex:1}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
+            '@media(max-width:700px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-maintenance-summary{grid-template-columns:minmax(0,1fr)}.sub-store-page .sub-store-maintenance-summary-item{border-right:0;border-bottom:1px solid var(--border-color,#ddd)}.sub-store-page .sub-store-maintenance-summary-item:last-child{border-bottom:0}.sub-store-page .sub-store-maintenance-row{grid-template-columns:minmax(0,1fr) auto;gap:.35em .75em}.sub-store-page .sub-store-maintenance-row .sub-store-maintenance-status{grid-column:1}.sub-store-page .sub-store-maintenance-row .cbi-button{grid-column:2;grid-row:1 / span 2}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-tabs .cbi-button{flex:1}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
         ].join('');
         return E('div', { 'class': 'sub-store-page' }, [
             E('style', {}, [pageStyles]),
