@@ -21,11 +21,11 @@ The installer targets iStoreOS/OpenWrt 24.10.x with `opkg` and LuCI. It installs
 
 ## Build and download
 
-正式发布只能从 **Actions → Build sub-store installer → Run workflow** 手动启动，且只能选择 `main`。普通代码推送不会构建或发布正式安装包；每周计划任务只检查官方 Docker 镜像。
+正式发布只能从 **Actions → Build sub-store installer → Run workflow** 手动启动，且只能选择 `main`。启动时选择 `patch`（默认，兼容性修复）、`minor`（向后兼容的新功能）或 `major`（不兼容的变更）；普通代码推送不会构建或发布正式安装包，每周计划任务只检查官方 Docker 镜像。
 
-版本格式为 `主版本.次版本.Patch`，例如 `0.0.1`。基准版本是 `0.0.0`，首次发布为 `0.0.1`；主、次版本各为 `0–9`，Patch 为 `0–99` 且不补前导零。Patch 到 `99` 后进位，例如 `0.0.99 → 0.1.0`、`0.9.99 → 1.0.0`。最高版本 `9.9.99` 后停止发布。
+版本采用 `MAJOR.MINOR.PATCH`，从 `0.0.0` 开始，数字不补前导零且不设项目级上限。Patch 递增仅增加末段（`1.9.99 → 1.9.100`）；Minor 递增次版本并将 Patch 归零；Major 递增主版本并将 Minor、Patch 归零。Git Tag 使用 `v` 前缀，例如 `v1.4.12`；安装包为 `sub-store-1.4.12.run`，安装器记录 `1.4.12`。
 
-启动发布会先建立草稿并分配版本。失败后重跑或再次启动会继续该草稿版本；完整发布过的版本不会覆盖，下次发布再递增。安装包和 `.sha256` 文件上传后会从 Release 下载并校验，成功后才公开 Release。发布使用仓库 Actions Secret `RELEASE_PUBLISH_TOKEN`，Fine-grained PAT 需有 `Contents: Read and write` 权限。
+启动发布会先建立草稿并分配版本。失败后重跑或再次启动会继续该草稿版本，即使重新启动时选择了不同递增类型也不改版本；完整发布过的版本不会覆盖。安装包和 `.sha256` 文件上传后会从 Release 下载并校验，成功后才公开 Release。仓库发布的是 iStoreOS 安装包，不构建自有 Docker 镜像；官方 `xream/sub-store:latest` 版本独立。发布使用仓库 Actions Secret `RELEASE_PUBLISH_TOKEN`，Fine-grained PAT 需有 `Contents: Read and write` 权限。
 
 发布前会检查 POSIX shell、OpenWrt BusyBox `ash`、LuCI、前端、Docker 容器及安装包。实际 iStoreOS 安装流程仍需在设备上验证。
 

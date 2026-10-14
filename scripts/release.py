@@ -210,9 +210,13 @@ def create_draft(repo: str, tag: str, version: str, source_sha: str, body: str, 
 
 
 def prepare() -> None:
-    env = require_environment("GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_REF", "GITHUB_SHA", "GITHUB_RUN_ID")
+    env = require_environment(
+        "GH_TOKEN", "GITHUB_REPOSITORY", "GITHUB_REF", "GITHUB_SHA", "GITHUB_RUN_ID", "BUMP_TYPE"
+    )
     if env["GITHUB_REF"] != "refs/heads/main":
         raise ReleaseError("正式发布只能从 main 分支手动启动")
+    if env["BUMP_TYPE"] not in {"patch", "minor", "major"}:
+        raise ReleaseError("版本升级类型只能是 patch、minor 或 major")
 
     repo = env["GITHUB_REPOSITORY"]
     run_id = env["GITHUB_RUN_ID"]
@@ -265,9 +269,7 @@ def prepare() -> None:
         complete_states = [state for state in states if state["complete"]]
         latest = max((state["parts"] for state in complete_states), default=(0, 0, 0))
         current = format_version(latest)
-        version = next_version(current)
-        if version is None:
-            raise ReleaseError("已达到最高版本 9.9.99，停止发布")
+        version = next_version(current, env["BUMP_TYPE"])
         selected_tag = f"v{version}"
         selected = {
             "release": None,

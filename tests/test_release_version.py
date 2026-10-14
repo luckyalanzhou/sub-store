@@ -14,28 +14,37 @@ from release_version import next_version, parse_tag, parse_version  # noqa: E402
 
 
 class ReleaseVersionTests(unittest.TestCase):
-    def test_patch_and_minor_rollover(self):
+    def test_patch_minor_and_major_bumps(self):
         self.assertEqual(next_version("0.0.0"), "0.0.1")
-        self.assertEqual(next_version("0.0.98"), "0.0.99")
-        self.assertEqual(next_version("0.0.99"), "0.1.0")
-        self.assertEqual(next_version("0.9.99"), "1.0.0")
-        self.assertEqual(next_version("9.9.98"), "9.9.99")
+        self.assertEqual(next_version("1.9.99", "patch"), "1.9.100")
+        self.assertEqual(next_version("1.4.12", "minor"), "1.5.0")
+        self.assertEqual(next_version("1.4.12", "major"), "2.0.0")
 
-    def test_maximum_stops_without_wrapping(self):
-        self.assertIsNone(next_version("9.9.99"))
+    def test_invalid_bump_type_is_rejected(self):
+        with self.assertRaises(ValueError):
+            next_version("1.4.12", "release")
 
-    def test_version_ranges_and_canonical_patch(self):
-        for version in ("0.0.0", "9.9.99", "2.3.4"):
+    def test_unbounded_numeric_components_and_canonical_format(self):
+        for version in ("0.0.0", "999.1000.10000", "2.3.4"):
             self.assertEqual(parse_version(version), tuple(map(int, version.split("."))))
-        for version in ("10.0.0", "0.10.0", "0.0.100", "0.0.01", "00.0.1", "v0.0.1", "1.2"):
+        for version in ("0.0.01", "00.0.1", "1.00.1", "1.2", "v1.2.3", "-1.0.0"):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 parse_version(version)
 
     def test_version_tags_are_strict(self):
-        self.assertEqual(parse_tag("v0.0.99"), (0, 0, 99))
+        self.assertEqual(parse_tag("v1.9.100"), (1, 9, 100))
+        self.assertEqual(parse_tag("v999.1000.10000"), (999, 1000, 10000))
         self.assertIsNone(parse_tag("latest"))
-        with self.assertRaises(ValueError):
-            parse_tag("v0.0.100")
+        for tag in ("v01.0.0", "v1.00.0", "v1.0.01"):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                parse_tag(tag)
+
+    def test_pending_versions_sort_by_numeric_components(self):
+        tags = {"v1.10.0", "v1.9.100", "v1.9.99"}
+        candidates = pending_candidates([], tags, set())
+        self.assertEqual([candidate["tag"] for candidate in candidates], [
+            "v1.9.99", "v1.9.100", "v1.10.0",
+        ])
 
     def test_incomplete_release_and_orphan_tag_resume_before_increment(self):
         releases = [
@@ -78,6 +87,7 @@ class ReleaseVersionTests(unittest.TestCase):
                 "GITHUB_SHA": "source-sha",
                 "GITHUB_RUN_ID": "100",
                 "GITHUB_OUTPUT": str(output),
+                "BUMP_TYPE": "patch",
             }
             with patch.dict(os.environ, env), \
                  patch("release.list_api_pages", side_effect=[[], []]), \
@@ -94,7 +104,7 @@ class ReleaseVersionTests(unittest.TestCase):
 
     def test_next_manual_release_increments_after_last_complete_release(self):
         complete = {
-            "tag_name": "v0.0.6",
+            "tag_name": "v1.4.12",
             "draft": False,
             "body": "<!-- sub-store-run-ids: 90 -->",
             "assets": [],
@@ -108,18 +118,19 @@ class ReleaseVersionTests(unittest.TestCase):
                 "GITHUB_SHA": "new-source-sha",
                 "GITHUB_RUN_ID": "101",
                 "GITHUB_OUTPUT": str(output),
+                "BUMP_TYPE": "minor",
             }
             with patch.dict(os.environ, env), \
-                 patch("release.list_api_pages", side_effect=[[complete], [{"name": "v0.0.6"}]]), \
+                 patch("release.list_api_pages", side_effect=[[complete], [{"name": "v1.4.12"}]]), \
                  patch("release.published_release_is_complete", return_value=True), \
                  patch("release.command") as command_mock, \
                  patch("release.release_commit", return_value="new-source-sha"):
                 prepare()
             values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
-            self.assertEqual(values["version"], "0.0.7")
-            self.assertEqual(values["previous_tag"], "v0.0.6")
+            self.assertEqual(values["version"], "1.5.0")
+            self.assertEqual(values["previous_tag"], "v1.4.12")
             create_args = command_mock.call_args.args[0]
-            self.assertEqual(create_args[:4], ["gh", "release", "create", "v0.0.7"])
+            self.assertEqual(create_args[:4], ["gh", "release", "create", "v1.5.0"])
 
     def test_new_dispatch_resumes_draft_version_and_records_both_runs(self):
         draft = {
@@ -137,6 +148,7 @@ class ReleaseVersionTests(unittest.TestCase):
                 "GITHUB_SHA": "new-source-sha",
                 "GITHUB_RUN_ID": "100",
                 "GITHUB_OUTPUT": str(output),
+                "BUMP_TYPE": "major",
             }
             with patch.dict(os.environ, env), \
                  patch("release.list_api_pages", side_effect=[[draft], [{"name": "v0.0.7"}]]), \
@@ -165,6 +177,7 @@ class ReleaseVersionTests(unittest.TestCase):
                 "GITHUB_SHA": "new-source-sha",
                 "GITHUB_RUN_ID": "101",
                 "GITHUB_OUTPUT": str(output),
+                "BUMP_TYPE": "major",
             }
             with patch.dict(os.environ, env), \
                  patch("release.list_api_pages", side_effect=[[incomplete], [{"name": "v0.0.8"}]]), \

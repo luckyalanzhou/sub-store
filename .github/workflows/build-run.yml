@@ -2,6 +2,16 @@ name: Build sub-store installer
 
 on:
   workflow_dispatch:
+    inputs:
+      bump:
+        description: patch=兼容性修复，minor=向后兼容的新功能，major=不兼容的变更
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+        required: true
   schedule:
     - cron: '17 3 * * 1'
 
@@ -77,6 +87,7 @@ jobs:
         run: python3 scripts/release.py prepare
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+          BUMP_TYPE: ${{ inputs.bump || 'patch' }}
 
   build:
     name: Build and verify release assets
