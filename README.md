@@ -8,7 +8,7 @@ This repository builds an iStoreOS manual-install `.run` package in the Makeself
 
 - One official sub-store container with separate frontend and API ports: frontend defaults to host `3001` and API defaults to host `3000`.
 - LuCI page at **服务 → sub-store** to edit host ports, an optional public URL, API random path and Gist sync schedule, and to view the actual data path.
-- LuCI actions to start, stop, restart with current settings, pull the latest image, and rotate the API path.
+- LuCI actions to start, stop and restart the service, check the plugin and Docker image together, update changed components, and rotate the API path.
 - A quick-access button under the management URL opens sub-store in a new tab.
 - An OpenWrt init service enabled at boot.
 - A self-extracting `.run` installer for iStoreOS manual installation.
@@ -41,7 +41,7 @@ chmod +x "$RUN_FILE"
 
 The installer reports six stages and points to `/tmp/sub-store-run-install.log` on failure. The iStoreOS-themed LuCI page keeps status and the Web entry visible above basic/advanced settings, logs and maintenance tabs. One scrollable panel switches between the official container runtime log and local maintenance output. Logs are requested only while that panel is visible and retain at most 512 KiB each; excess output is removed automatically. Lightweight service state continues to refresh every five seconds. Clearing maintenance output does not remove Docker logs, installer diagnostics or Sub-Store data. **Save & Apply** commits this app's settings and queues the container restart. **Save** stores settings without restarting. Maintenance tasks reserve a lock before returning to LuCI, so long image downloads do not hold the RPC request open.
 
-Use **检查更新** in LuCI to check both the GitHub Release and the official Docker image. Newer versions are downloaded and installed automatically; the plugin installer verifies SHA-256 and changes only LuCI files, while image replacement preserves the Docker data volume. LuCI reloads after confirming that the plugin version changed successfully. Manual `.run` installation remains available.
+Use **检查更新** in LuCI to check both the GitHub Release and the official Docker image. The image is pulled and compared; an unchanged image does not recreate the container. A newer plugin is downloaded, verified against SHA-256, and installed without changing Docker. Each update is attempted even if the other fails, and results appear in the maintenance log. Image replacement preserves the Docker data volume. LuCI reloads after confirming that the plugin version changed successfully. Manual `.run` installation remains available.
 
 ## First launch
 
@@ -82,6 +82,7 @@ The managed instance uses separate frontend (`3001`) and backend (`3000`) contai
 /usr/bin/sub-storectl logs
 /usr/bin/sub-storectl check
 /usr/bin/sub-storectl update
+/usr/bin/sub-storectl update-all
 /usr/bin/sub-storectl rotate-key
 /usr/bin/sub-storectl remove-container
 /usr/bin/sub-storectl export-data /mnt/path/sub-store-data.tar.gz
