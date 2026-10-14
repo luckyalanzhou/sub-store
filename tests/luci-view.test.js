@@ -13,7 +13,12 @@ function setup() {
     const uci = { load: async () => {}, unload() {} };
     const backend = { exec: async (path, args) => {
         calls.push([path, args]);
-        return path.endsWith('status') ? { code: 0, stdout: JSON.stringify(state) } : { code: 0, stdout: 'accepted' };
+        if (path.endsWith('status')) return { code: 0, stdout: JSON.stringify(state) };
+        if (path.endsWith('job.sh')) {
+            Object.assign(state, { busy: true, action: args[1], phase: 'running', container: 'maintenance',
+                operation: '正在执行：' + args[1] + '；开始时间：2026-10-14 12:00:00' });
+        }
+        return { code: 0, stdout: 'accepted' };
     } };
     class Map {
         section() { return { tab() {}, taboption(tab, type, name) {
@@ -150,6 +155,7 @@ test('image-only update does not reload the LuCI page', async () => {
 test('save-and-apply validates and commits before enqueueing restart', async () => {
     const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
     await t.view.handleSaveApply();
+    await t.view.enqueueTask;
     const index = name => t.calls.findIndex(call => call[0] === name);
     assert.ok(index('save') < index('commit'));
     assert.ok(index('commit') < index('/usr/lib/sub-store/job.sh'));
@@ -171,27 +177,70 @@ test('running task prevents save and competing operation', async () => {
 test('failed RPC is surfaced and controls are released', async () => {
     const t = setup(); await t.view.render(await t.view.load());
     t.backend.exec = async () => ({ code: 1, stderr: 'Docker unavailable' });
-    await assert.rejects(t.view.run('start'), /Docker unavailable/);
+    await t.view.run('start');
+    await t.view.enqueueTask;
     assert.equal(t.view.localBusy, false);
     assert.equal(t.calls.some(call => call[0] === 'notice'), true);
     await t.view.refresh();
     assert.match(t.view.status.textContent, /状态读取失败/);
 });
-test('XHR timeout reports that the queued task may still be running', async () => {
+test('slow enqueue returns immediately and polling confirms the queued task', async () => {
+    const t = setup(); await t.view.render(await t.view.load());
+    let resolveEnqueue;
+    t.backend.exec = (path, args) => {
+        t.calls.push([path, args]);
+        if (path.endsWith('job.sh')) return new Promise(resolve => { resolveEnqueue = resolve; });
+        return { code: 0, stdout: JSON.stringify(t.state) };
+    };
+    await t.view.run('update-all');
+    assert.equal(t.view.localBusy, true);
+    assert.equal(t.view.enqueuePendingAction, 'update-all');
+    assert.equal(t.view.updateStatus.textContent, '正在提交检查请求…');
+
+    Object.assign(t.state, { busy: true, action: 'update-all', phase: 'running', container: 'maintenance',
+        operation: '正在执行：update-all；开始时间：2026-10-14 12:00:00' });
+    await t.polls[0]();
+    assert.equal(t.view.localBusy, false);
+    assert.equal(t.view.enqueuePendingAction, null);
+    assert.equal(t.view.updateStatus.textContent, '正在检查并更新…');
+
+    resolveEnqueue({ code: 0, stdout: 'accepted' });
+    await t.view.enqueueTask;
+    assert.equal(t.calls.some(call => call[0] === 'notice'), false);
+});
+test('XHR timeout is quiet when polling confirms the queued task', async () => {
     const t = setup(); await t.view.render(await t.view.load());
     t.backend.exec = async (path, args) => {
         t.calls.push([path, args]);
         if (path.endsWith('job.sh')) {
-            t.state.busy = true;
-            t.state.container = 'maintenance';
+            Object.assign(t.state, { busy: true, container: 'maintenance', action: 'update', phase: 'running',
+                operation: '正在执行：update；开始时间：2026-10-14 12:00:00' });
             throw new Error('XHR request timed out');
         }
         return { code: 0, stdout: JSON.stringify(t.state) };
     };
     await t.view.run('update');
+    await t.view.enqueueTask;
     assert.equal(t.view.status.textContent, 'sub-store 服务状态：正在维护');
-    assert.equal(t.calls.some(call => call[0] === 'notice' && call[3] === 'warning'), true);
+    assert.equal(t.calls.some(call => call[0] === 'notice'), false);
     assert.equal(t.view.localBusy, false);
+});
+test('XHR timeout keeps controls locked until polling confirms no task started', async () => {
+    const t = setup(); await t.view.render(await t.view.load());
+    t.backend.exec = async (path, args) => {
+        t.calls.push([path, args]);
+        if (path.endsWith('job.sh')) throw new Error('XHR request timed out');
+        return { code: 0, stdout: JSON.stringify(t.state) };
+    };
+    await t.view.run('update-all');
+    await t.view.enqueueTask;
+    assert.equal(t.view.localBusy, true);
+    assert.equal(t.view.enqueuePendingAction, 'update-all');
+    assert.equal(t.calls.some(call => call[0] === 'notice'), false);
+    await t.polls[0]();
+    assert.equal(t.view.localBusy, false);
+    assert.equal(t.view.enqueuePendingAction, null);
+    assert.equal(t.calls.some(call => call[0] === 'notice' && call[3] === 'error'), true);
 });
 test('logs are displayed as text and stopped container hides open link', async () => {
     const t = setup(); t.state.container_log = '<script>unsafe</script>'; t.state.container = 'exited';
@@ -202,6 +251,7 @@ test('logs are displayed as text and stopped container hides open link', async (
 test('service check switches to maintenance output', async () => {
     const t = setup(); await t.view.render(await t.view.load());
     await t.view.run('check');
+    await t.view.enqueueTask;
     assert.equal(t.view.activeLog, 'operation');
     assert.deepEqual(t.calls.find(call => call[0].endsWith('job.sh'))[1], ['--enqueue', 'check']);
 });

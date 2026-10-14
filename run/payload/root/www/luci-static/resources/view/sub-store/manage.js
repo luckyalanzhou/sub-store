@@ -55,34 +55,79 @@ return view.extend({
         if (this.map && this.map.root && this.map.root.querySelectorAll)
             this.map.root.querySelectorAll('input,select,textarea').forEach(input => { input.disabled = disabled; });
     },
+    clearPendingEnqueue: function(action) {
+        if (this.enqueuePendingAction !== action) return false;
+        this.enqueuePendingAction = null;
+        this.enqueuePreviousOperation = null;
+        this.enqueueRequestError = null;
+        this.enqueueRequestTimedOut = false;
+        this.enqueueStatusMisses = 0;
+        this.localBusy = false;
+        return true;
+    },
+    failPendingEnqueue: function(action, error) {
+        if (!this.clearPendingEnqueue(action)) return;
+        this.awaitingTaskDetails = false;
+        if (this.updateAction === action) {
+            this.updateAction = null;
+            this.updateControls();
+        }
+        if (this.reloadAfterTask) {
+            this.reloadAfterTask = false;
+            this.reloadTaskAccepted = false;
+        }
+        ui.addNotification(null, E('p', {}, ['设备未确认此操作：' + error.message + '。请查看维护日志后再重试。']), 'error');
+    },
     refresh: async function(mode) {
         try {
             const wasBusy = !!(this.state && this.state.busy);
             let s = await this.snapshot(mode || 'summary');
-            if ((mode || 'summary') === 'summary' && (wasBusy || this.awaitingTaskDetails) && !s.busy && s.phase !== 'running') {
+            if ((mode || 'summary') === 'summary' && (wasBusy || (this.awaitingTaskDetails && !this.enqueuePendingAction)) && !s.busy && s.phase !== 'running') {
                 s = Object.assign(s, await this.snapshot('details'));
                 this.awaitingTaskDetails = false;
             }
+            const pendingAction = this.enqueuePendingAction;
+            const operationChanged = s.operation && s.operation !== this.enqueuePreviousOperation;
+            const taskStarted = pendingAction && s.action === pendingAction && (s.busy || operationChanged);
             const pluginUpdateInstalled = this.updateAction === 'update-all' &&
                 s.action === 'update-all' && !s.busy && s.phase !== 'running' &&
                 this.updateStartVersion && s.version && s.version !== this.updateStartVersion &&
                 s.plugin_latest_version === s.version &&
                 (s.plugin_update_available === false || s.plugin_update_available === '0');
             this.state = Object.assign(this.state || {}, s);
+            if (taskStarted) {
+                this.clearPendingEnqueue(pendingAction);
+                if (this.reloadAfterTask) this.reloadTaskAccepted = true;
+            } else if (pendingAction && this.enqueueRequestError) {
+                if (this.enqueueRequestTimedOut) {
+                    this.enqueueStatusMisses = (this.enqueueStatusMisses || 0) + 1;
+                    if (this.enqueueStatusMisses < 2) {
+                        if (pendingAction === 'update-all' && this.updateStatus)
+                            this.updateStatus.textContent = '正在确认设备状态；状态和日志会自动更新，请勿重复点击。';
+                    } else {
+                        this.failPendingEnqueue(pendingAction, this.enqueueRequestError);
+                    }
+                } else {
+                    this.failPendingEnqueue(pendingAction, this.enqueueRequestError);
+                }
+            }
             if (this.updateAction && !s.busy && s.phase !== 'running' && s.action === this.updateAction)
                 this.updateAction = null;
             this.paint();
             if (pluginUpdateInstalled) this.beginUpdateReloadCountdown(s.version);
-            if (this.reloadAfterTask && !s.busy && s.phase !== 'running') {
+            if (this.reloadAfterTask && this.reloadTaskAccepted && !s.busy && s.phase !== 'running') {
                 this.reloadAfterTask = false;
+                this.reloadTaskAccepted = false;
                 uci.unload('sub-store');
                 await uci.load('sub-store');
                 await this.map.load();
                 await this.map.reset();
             }
+            return true;
         } catch (error) {
             this.status.textContent = '状态读取失败：' + error.message;
             this.status.className = 'alert-message warning';
+            return false;
         }
     },
     paint: function() {
@@ -116,6 +161,8 @@ return view.extend({
         const available = s.plugin_update_available === true || s.plugin_update_available === '1';
         if (this.pluginReloadCountdown !== undefined)
             this.updateStatus.textContent = '插件已更新到 ' + this.pluginReloadVersion + '；' + this.pluginReloadCountdown + ' 秒后刷新页面';
+        else if (this.enqueuePendingAction === 'update-all')
+            this.updateStatus.textContent = '正在提交检查请求…';
         else if (this.updateAction === 'update-all')
             this.updateStatus.textContent = '正在检查并更新…';
         else if (s.action === 'update-all' && s.phase === 'failed')
@@ -193,39 +240,66 @@ return view.extend({
         if (action === 'update-all') {
             this.updateAction = action;
             this.updateStartVersion = this.state && this.state.version;
-            this.updateControls();
             this.selectLog('operation');
         }
+        if (action === 'check') this.selectLog('operation');
+        this.enqueuePendingAction = action;
+        this.enqueuePreviousOperation = (this.state && this.state.operation) || '';
+        this.enqueueRequestError = null;
         this.setBusy(true);
         this.awaitingTaskDetails = true;
-        try {
-            const r = await fs.exec('/usr/lib/sub-store/job.sh', ['--enqueue', action]);
-            if (r.code !== 0) throw new Error(r.stderr || r.stdout || '操作提交失败');
-            if (action === 'check') this.selectLog('operation');
-            await this.refresh('summary');
-        } catch (error) {
-            if (/timed out|timeout/i.test(error.message || '')) {
-                await this.refresh('summary');
-                ui.addNotification(null, E('p', {}, ['等待设备响应超时；操作可能已在后台启动，请查看维护日志，暂勿重复点击。']), 'warning');
+        this.updateControls();
+        this.enqueueTask = Promise.resolve().then(() => fs.exec('/usr/lib/sub-store/job.sh', ['--enqueue', action])).then(r => {
+            if (r.code !== 0) return { error: new Error(r.stderr || r.stdout || '操作提交失败') };
+            return { accepted: true };
+        }, error => ({ error })).then(async result => {
+            if (this.enqueuePendingAction !== action) return;
+            if (result.error) {
+                this.enqueueRequestError = result.error;
+                this.enqueueRequestTimedOut = /timed out|timeout/i.test(result.error.message || '');
+                this.enqueueStatusMisses = 0;
+                const refreshed = await this.refresh('summary');
+                if (this.enqueuePendingAction === action && !refreshed) {
+                    if (this.enqueueRequestTimedOut) {
+                        if (action === 'update-all' && this.updateStatus)
+                            this.updateStatus.textContent = '正在确认设备状态；状态和日志会自动更新，请勿重复点击。';
+                    } else {
+                        this.failPendingEnqueue(action, result.error);
+                    }
+                }
                 return;
             }
-            ui.addNotification(null, E('p', {}, [error.message]), 'error');
-            this.awaitingTaskDetails = false;
-            if (this.updateAction === action) {
-                this.updateAction = null;
-                this.updateControls();
+            await this.refresh('summary');
+        }).catch(error => {
+            if (this.enqueuePendingAction === action) {
+                this.enqueueRequestError = error;
+                this.enqueueRequestTimedOut = /timed out|timeout/i.test(error.message || '');
+                this.enqueueStatusMisses = 0;
+                return this.refresh('summary').then(refreshed => {
+                    if (this.enqueuePendingAction === action && !refreshed && !this.enqueueRequestTimedOut)
+                        this.failPendingEnqueue(action, error);
+                    if (this.enqueuePendingAction === action && !refreshed && this.enqueueRequestTimedOut &&
+                        action === 'update-all' && this.updateStatus)
+                        this.updateStatus.textContent = '正在确认设备状态；状态和日志会自动更新，请勿重复点击。';
+                });
             }
-            throw error;
-        } finally { this.setBusy(false); }
+        });
     },
     confirm: function(action, title, message) {
         ui.showModal(title, [E('p', {}, [message]), E('div', { 'class': 'right' }, [
             E('button', { 'class': 'cbi-button', click: ui.hideModal }, ['取消']), ' ',
             E('button', { 'class': 'cbi-button cbi-button-negative', click: ui.createHandlerFn(this, async function() {
                 ui.hideModal();
-                if (action === 'rotate-key') this.reloadAfterTask = true;
+                if (action === 'rotate-key') {
+                    this.reloadAfterTask = true;
+                    this.reloadTaskAccepted = false;
+                }
                 try { await this.run(action); }
-                catch (error) { this.reloadAfterTask = false; throw error; }
+                catch (error) {
+                    this.reloadAfterTask = false;
+                    this.reloadTaskAccepted = false;
+                    throw error;
+                }
             }) }, ['确认执行'])
         ])]);
     },
@@ -249,6 +323,7 @@ return view.extend({
     handleSaveApply: async function() {
         await this.handleSave();
         this.reloadAfterTask = true;
+        this.reloadTaskAccepted = false;
         try { await this.run('restart'); }
         catch (error) { this.reloadAfterTask = false; throw error; }
     },
