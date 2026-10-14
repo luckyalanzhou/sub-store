@@ -168,8 +168,15 @@ def write_note(body: str) -> str:
     return path
 
 
-def update_draft(repo: str, tag: str, version: str, body: str, target_sha: str | None = None) -> None:
-    if target_sha:
+def update_draft(
+    repo: str,
+    tag: str,
+    version: str,
+    body: str,
+    target_sha: str | None = None,
+    tag_exists: bool = True,
+) -> None:
+    if target_sha and tag_exists:
         command([
             "gh", "api", "--method", "PATCH", f"repos/{repo}/git/refs/tags/{tag}",
             "-F", f"sha={target_sha}",
@@ -282,12 +289,21 @@ def prepare() -> None:
     version = selected["version"]
     if selected["release"] is None and selected_tag not in tag_names:
         source_sha = env["GITHUB_SHA"]
-    elif selected["release"] and selected["release"].get("draft", False) and run_id not in release_ids(
-        selected["release"].get("body", "")
-    ):
-        # A fresh manual run may include fixes committed after the draft was allocated.
-        source_sha = env["GITHUB_SHA"]
+    elif selected["release"] and selected["release"].get("draft", False):
+        prior_ids = release_ids(selected["release"].get("body", ""))
+        if run_id not in prior_ids:
+            # A fresh manual run may include fixes committed after the draft was allocated.
+            source_sha = env["GITHUB_SHA"]
+        elif selected_tag not in tag_names:
+            # GitHub drafts do not necessarily create their tag until publication.
+            source_sha = str(selected["release"].get("target_commitish", ""))
+            if not source_sha:
+                raise ReleaseError(f"Draft release {selected_tag} has no saved target commit")
+        else:
+            source_sha = release_commit(repo, selected_tag)
     else:
+        if selected_tag not in tag_names:
+            raise ReleaseError(f"Release {selected_tag} has no Git tag or resumable draft target")
         source_sha = release_commit(repo, selected_tag)
 
     complete_before = [state for state in states if state["complete"] and state["parts"] < selected["parts"]]
@@ -301,10 +317,18 @@ def prepare() -> None:
         create_draft(repo, selected_tag, version, source_sha, body, verify_tag=selected_tag in tag_names)
     else:
         target_sha = source_sha if selected["release"].get("draft", False) and run_id not in prior_ids else None
-        update_draft(repo, selected_tag, version, body, target_sha=target_sha)
+        update_draft(
+            repo,
+            selected_tag,
+            version,
+            body,
+            target_sha=target_sha,
+            tag_exists=selected_tag in tag_names,
+        )
 
-    # Resolve the tag again after creating/reusing the draft so the build is pinned to its source.
-    source_sha = release_commit(repo, selected_tag)
+    # Existing tags are authoritative; drafts without tags retain their saved target SHA.
+    if selected_tag in tag_names:
+        source_sha = release_commit(repo, selected_tag)
     set_output({
         "version": version,
         "tag": selected_tag,

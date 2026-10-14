@@ -136,6 +136,7 @@ class ReleaseVersionTests(unittest.TestCase):
         draft = {
             "tag_name": "v0.0.7",
             "draft": True,
+            "target_commitish": "original-source-sha",
             "body": "<!-- sub-store-run-ids: 99 -->",
             "assets": [],
         }
@@ -151,15 +152,47 @@ class ReleaseVersionTests(unittest.TestCase):
                 "BUMP_TYPE": "major",
             }
             with patch.dict(os.environ, env), \
-                 patch("release.list_api_pages", side_effect=[[draft], [{"name": "v0.0.7"}]]), \
+                 patch("release.list_api_pages", side_effect=[[draft], []]), \
                  patch("release.command") as command_mock, \
-                 patch("release.release_commit", return_value="new-source-sha"):
+                 patch("release.release_commit") as release_commit_mock:
                 prepare()
             values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
             self.assertEqual(values["version"], "0.0.7")
             self.assertEqual(values["run_ids"], "99,100")
             self.assertEqual(values["source_sha"], "new-source-sha")
-            self.assertTrue(any(args[1:3] == ["api", "--method"] for (args,), _ in command_mock.call_args_list))
+            edit_args = next(args for (args,), _ in command_mock.call_args_list if args[:3] == ["gh", "release", "edit"])
+            self.assertIn("--target", edit_args)
+            self.assertFalse(any(args[1:3] == ["api", "--method"] for (args,), _ in command_mock.call_args_list))
+            release_commit_mock.assert_not_called()
+
+    def test_retry_of_draft_without_tag_uses_saved_target_commit(self):
+        draft = {
+            "tag_name": "v0.0.1",
+            "draft": True,
+            "target_commitish": "original-source-sha",
+            "body": "<!-- sub-store-run-ids: 100 -->",
+            "assets": [],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "github-output"
+            env = {
+                "GH_TOKEN": "test-token",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SHA": "later-source-sha",
+                "GITHUB_RUN_ID": "100",
+                "GITHUB_OUTPUT": str(output),
+                "BUMP_TYPE": "patch",
+            }
+            with patch.dict(os.environ, env), \
+                 patch("release.list_api_pages", side_effect=[[draft], []]), \
+                 patch("release.command"), \
+                 patch("release.release_commit") as release_commit_mock:
+                prepare()
+            values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+            self.assertEqual(values["version"], "0.0.1")
+            self.assertEqual(values["source_sha"], "original-source-sha")
+            release_commit_mock.assert_not_called()
 
     def test_incomplete_published_release_is_demoted_and_resumed(self):
         incomplete = {
