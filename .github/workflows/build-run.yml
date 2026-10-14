@@ -273,4 +273,4 @@ jobs:
           body_path: dist/release-notes.md
           files: dist/sub-store-${{ needs.build.outputs.version }}.run
           fail_on_unmatched_files: true
-          token: ${{ secrets.SUB_STORE_RELEASE_TOKEN }}
+          token: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
