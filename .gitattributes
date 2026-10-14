@@ -9,3 +9,4 @@ run/payload/root/usr/bin/sub-storectl text eol=lf
 *.js text eol=lf
 *.json text eol=lf
 run/payload/root/usr/lib/sub-store/status text eol=lf
+run/payload/root/usr/lib/sub-store/plugin-update text eol=lf

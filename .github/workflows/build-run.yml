@@ -159,12 +159,14 @@ jobs:
             run/payload/root/usr/bin/sub-storectl \
             run/payload/root/usr/lib/sub-store/cron.sh \
             run/payload/root/usr/lib/sub-store/job.sh \
+            run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
             tests/operation-feedback.sh \
             tests/cron-validation.sh \
             tests/docker-volume-storage.sh \
-            tests/image-update.sh; do
+            tests/image-update.sh \
+            tests/plugin-update.sh; do
             sh -n "$script"
           done
 
@@ -184,12 +186,14 @@ jobs:
             run/payload/root/usr/bin/sub-storectl \
             run/payload/root/usr/lib/sub-store/cron.sh \
             run/payload/root/usr/lib/sub-store/job.sh \
+            run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
             tests/operation-feedback.sh \
             tests/cron-validation.sh \
             tests/docker-volume-storage.sh \
-            tests/image-update.sh; do
+            tests/image-update.sh \
+            tests/plugin-update.sh; do
             if grep -q $'\r' "$script"; then
               echo "CRLF line endings are not allowed in shell script: $script" >&2
               exit 1
@@ -213,6 +217,7 @@ jobs:
           busybox ash tests/image-update.sh
           BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
           busybox ash tests/install-permissions.sh
+          busybox ash tests/plugin-update.sh
 
       - name: Check native LuCI view and status endpoint
         run: |

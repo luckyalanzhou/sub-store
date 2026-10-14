@@ -6,7 +6,7 @@ function setup() {
     const options = {}, calls = [], polls = [];
     const state = { container: 'running', health: 'healthy', url: 'http://router.test:3001/?api=x', busy: false, version: 'test',
         app_version: '2.42.3', created: '2026-10-13T00:00:00Z', output: 'maintenance log', container_log: 'runtime log',
-        storage: '/mnt/docker/volumes/sub-store-data/_data' };
+        storage: '/mnt/docker/volumes/sub-store-data/_data', plugin_latest_version: '', plugin_update_available: false };
     const E = (tag, attrs = {}, children = []) => ({ tag, ...attrs, children, textContent: '', value: '', focus() {}, select() {} });
     const ui = { createHandlerFn: (ctx, fn) => fn.bind(ctx), changes: { init: async () => {} },
         addNotification: (...args) => calls.push(['notice', ...args]), showModal: (...args) => calls.push(['modal', ...args]), hideModal() {} };
@@ -75,7 +75,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.notEqual(t.options.access_host.validate('main', 'http://router:3001'), true);
     assert.equal(t.options.public_url.validate('main', 'https://sub.example.test'), true);
     assert.notEqual(t.options.public_url.validate('main', 'https://bad..example.test'), true);
-    assert.match(source, /更新官方程序；重建容器并保留数据/);
+    assert.match(source, /同时检查插件和官方镜像；有更新时自动安装并保留数据/);
 });
 test('unhealthy container is visible and completed work refreshes details', async () => {
     const t = setup(); await t.view.render(await t.view.load());
@@ -95,6 +95,57 @@ test('Cron rejects malformed, out-of-range and reversed ranges', () => {
     const { view } = setup();
     for (const cron of ['55 23 * * *', '0 */6 * * *', '0 0 1-15 * 1,5']) assert.equal(view.validCron(cron), true);
     for (const cron of ['60 23 * * *', '* * * *', '* * * * * *', '*/0 * * * *', '0 0 15-1 * *', '0 0 * * 8', '0,,1 * * * *']) assert.equal(view.validCron(cron), false);
+});
+test('plugin version comparison handles unbounded numeric components', () => {
+    const { view } = setup();
+    assert.equal(view.compareVersions('1.10.0', '1.9.99'), 1);
+    assert.equal(view.compareVersions('1.2.10000000000000000001', '1.2.9999999999999999999'), 1);
+    assert.equal(view.compareVersions('0.0.21', '0.0.21'), 0);
+    assert.equal(view.compareVersions('dev', '0.0.21'), null);
+});
+test('combined update verifies a newly installed plugin and shows a refresh countdown', async () => {
+    const t = setup(); await t.view.render(await t.view.load());
+    const previousWindow = global.window;
+    const timers = [], calls = [];
+    global.window = {
+        setInterval: fn => { timers.push(fn); return timers.length; },
+        clearInterval() {},
+        location: { reload: () => calls.push('reload') }
+    };
+    try {
+        t.view.updateStartVersion = '0.0.21';
+        t.view.updateAction = 'update-all';
+        t.view.awaitingTaskDetails = true;
+        Object.assign(t.state, { version: '0.0.22', plugin_latest_version: '0.0.22', plugin_update_available: false,
+            action: 'update-all', phase: 'failed', busy: false });
+        await t.view.refresh('summary');
+        assert.equal(t.view.updateStatus.textContent, '插件已更新到 0.0.22；5 秒后刷新页面');
+        for (let i = 0; i < 5; i++) timers[0]();
+        assert.deepEqual(calls, ['reload']);
+    } finally {
+        if (previousWindow === undefined) delete global.window;
+        else global.window = previousWindow;
+    }
+});
+test('image-only update does not reload the LuCI page', async () => {
+    const t = setup(); await t.view.render(await t.view.load());
+    const previousWindow = global.window;
+    const timers = [];
+    global.window = { setInterval: fn => { timers.push(fn); return timers.length; }, clearInterval() {},
+        location: { reload() { throw new Error('unexpected reload'); } } };
+    try {
+        t.view.updateStartVersion = '0.0.21';
+        t.view.updateAction = 'update-all';
+        t.view.awaitingTaskDetails = true;
+        Object.assign(t.state, { version: '0.0.21', plugin_latest_version: '0.0.21', plugin_update_available: false,
+            action: 'update-all', phase: 'success', busy: false });
+        await t.view.refresh('summary');
+        assert.equal(timers.length, 0);
+        assert.equal(t.view.updateStatus.textContent, '检查完成，插件已是最新版本 0.0.21');
+    } finally {
+        if (previousWindow === undefined) delete global.window;
+        else global.window = previousWindow;
+    }
 });
 test('save-and-apply validates and commits before enqueueing restart', async () => {
     const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
@@ -162,11 +213,31 @@ test('menu and ACL expose only this configuration and fixed helper paths', () =>
     assert.deepEqual(acl.write.uci, ['sub-store']);
     assert.deepEqual(Object.keys(acl.write.file), ['/usr/lib/sub-store/job.sh']);
 });
-test('maintenance keeps only image update and API key rotation', async () => {
+test('one update button checks the plugin and Docker image, then updates newer versions', async () => {
     const t = setup(); await t.view.render(await t.view.load());
-    assert.doesNotMatch(source, /check-update|检查插件新版本|下载新安装包/);
-    assert.match(source, /更新 Sub-Store 镜像/);
+    t.state.version = '0.0.21';
+    assert.equal(t.view.updateButton.children[0], '检查更新');
+    assert.equal(t.view.updateStatus.textContent, '同时检查插件和官方镜像；有更新时自动安装并保留数据。');
+    t.state.plugin_latest_version = '0.0.22';
+    t.state.plugin_update_available = true;
+    await t.view.refresh('details');
+    assert.equal(t.view.updateStatus.textContent, '插件有新版本 0.0.22；点击“检查更新”自动安装。');
+    await t.view.updateButton.click();
+    const queued = t.calls.filter(call => call[0].endsWith('job.sh')).map(call => call[1][1]);
+    assert.deepEqual(queued, ['update-all']);
+    assert.match(source, /同时检查插件和官方镜像；有更新时自动安装并保留数据/);
+    assert.doesNotMatch(source, /检查插件更新|下载并安装|更新 Sub-Store 镜像/);
     assert.match(source, /重新生成 API 密钥/);
+    const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');
+    const combinedAction = controller.slice(controller.indexOf('    update-all)'), controller.indexOf('    check-plugin-update)'));
+    assert.match(combinedAction, /\$0" update/);
+    assert.match(combinedAction, /plugin-update install-if-newer/);
+    assert.match(combinedAction, /image_result.*plugin_result/s);
+    assert.match(combinedAction, /plugin_result.*fail/s);
+    const installer = fs.readFileSync('run/payload/install.sh', 'utf8');
+    assert.match(installer, /PLUGIN_ONLY="\$\{SUB_STORE_PLUGIN_ONLY:-0\}"/);
+    assert.match(installer, /The Docker image, container, and data were not changed/);
+    assert.match(installer, /SUB_STORE_PLUGIN_ONLY/);
 });
 test('installer clears LuCI caches when replacing the page', () => {
     const installer = fs.readFileSync('run/payload/install.sh', 'utf8');

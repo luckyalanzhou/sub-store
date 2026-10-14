@@ -22,9 +22,23 @@ function validCron(value) {
             (range.length === 1 || +range[0] <= +range[1]);
     }));
 }
+function compareVersions(left, right) {
+    const parse = value => {
+        const match = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.exec(value || '');
+        return match && match.slice(1);
+    };
+    const a = parse(left), b = parse(right);
+    if (!a || !b) return null;
+    for (let i = 0; i < 3; i++) {
+        if (a[i].length !== b[i].length) return a[i].length > b[i].length ? 1 : -1;
+        if (a[i] !== b[i]) return a[i] > b[i] ? 1 : -1;
+    }
+    return 0;
+}
 
 return view.extend({
     validCron: validCron,
+    compareVersions: compareVersions,
     snapshot: async function(mode) {
         const r = await fs.exec('/usr/lib/sub-store/status', mode && mode !== 'summary' ? [mode] : []);
         if (r.code !== 0) throw new Error(r.stderr || '读取服务状态失败');
@@ -49,8 +63,16 @@ return view.extend({
                 s = Object.assign(s, await this.snapshot('details'));
                 this.awaitingTaskDetails = false;
             }
+            const pluginUpdateInstalled = this.updateAction === 'update-all' &&
+                s.action === 'update-all' && !s.busy && s.phase !== 'running' &&
+                this.updateStartVersion && s.version && s.version !== this.updateStartVersion &&
+                s.plugin_latest_version === s.version &&
+                (s.plugin_update_available === false || s.plugin_update_available === '0');
             this.state = Object.assign(this.state || {}, s);
+            if (this.updateAction && !s.busy && s.phase !== 'running' && s.action === this.updateAction)
+                this.updateAction = null;
             this.paint();
+            if (pluginUpdateInstalled) this.beginUpdateReloadCountdown(s.version);
             if (this.reloadAfterTask && !s.busy && s.phase !== 'running') {
                 this.reloadAfterTask = false;
                 uci.unload('sub-store');
@@ -81,9 +103,50 @@ return view.extend({
         this.appVersion.textContent = s.app_version || '暂未读取到版本';
         this.created.textContent = s.created || '容器尚未创建';
         this.api.value = s.api_url || '';
+        this.updateControls();
         this.paintLog();
         this.updateLogControls();
         this.setBusy(!!this.localBusy);
+    },
+    updateControls: function() {
+        if (!this.updateStatus) return;
+        const s = this.state || {};
+        const latest = s.plugin_latest_version || '';
+        const comparison = compareVersions(latest, s.version || '');
+        const available = s.plugin_update_available === true || s.plugin_update_available === '1';
+        if (this.pluginReloadCountdown !== undefined)
+            this.updateStatus.textContent = '插件已更新到 ' + this.pluginReloadVersion + '；' + this.pluginReloadCountdown + ' 秒后刷新页面';
+        else if (this.updateAction === 'update-all')
+            this.updateStatus.textContent = '正在检查并更新…';
+        else if (s.action === 'update-all' && s.phase === 'failed')
+            this.updateStatus.textContent = '更新未完全成功，请查看维护日志。';
+        else if (s.action === 'update-all' && s.phase === 'success' && latest && comparison === 0)
+            this.updateStatus.textContent = '检查完成，插件已是最新版本 ' + latest;
+        else if (s.action === 'update-all' && s.phase === 'success')
+            this.updateStatus.textContent = '检查更新完成。';
+        else if (latest && comparison === 0)
+            this.updateStatus.textContent = '插件当前版本：' + latest;
+        else if (available && comparison === 1)
+            this.updateStatus.textContent = '插件有新版本 ' + latest + '；点击“检查更新”自动安装。';
+        else if (latest && comparison === -1)
+            this.updateStatus.textContent = '插件当前版本：' + (s.version || '未知');
+        else
+            this.updateStatus.textContent = '同时检查插件和官方镜像；有更新时自动安装并保留数据。';
+    },
+    beginUpdateReloadCountdown: function(version) {
+        if (this.pluginReloadTimer || typeof window === 'undefined' || !window.setInterval) return;
+        this.pluginReloadVersion = version;
+        this.pluginReloadCountdown = 5;
+        this.updateControls();
+        this.pluginReloadTimer = window.setInterval(ui.createHandlerFn(this, function() {
+            this.pluginReloadCountdown -= 1;
+            this.updateControls();
+            if (this.pluginReloadCountdown <= 0) {
+                window.clearInterval(this.pluginReloadTimer);
+                this.pluginReloadTimer = null;
+                window.location.reload();
+            }
+        }), 1000);
     },
     selectLog: function(name) {
         this.activeLog = name;
@@ -127,6 +190,12 @@ return view.extend({
     },
     run: async function(action) {
         if (this.localBusy || (this.state && this.state.busy)) throw new Error('已有操作正在执行，请等待完成。');
+        if (action === 'update-all') {
+            this.updateAction = action;
+            this.updateStartVersion = this.state && this.state.version;
+            this.updateControls();
+            this.selectLog('operation');
+        }
         this.setBusy(true);
         this.awaitingTaskDetails = true;
         try {
@@ -142,6 +211,10 @@ return view.extend({
             }
             ui.addNotification(null, E('p', {}, [error.message]), 'error');
             this.awaitingTaskDetails = false;
+            if (this.updateAction === action) {
+                this.updateAction = null;
+                this.updateControls();
+            }
             throw error;
         } finally { this.setBusy(false); }
     },
@@ -257,6 +330,8 @@ return view.extend({
         this.image = E('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' });
         this.appVersion = E('span');
         this.created = E('span');
+        this.updateStatus = E('span', { 'aria-live': 'polite' }, ['同时检查插件和官方镜像；有更新时自动安装并保留数据。']);
+        this.updateButton = this.button('检查更新', 'update-all', 'positive');
         this.activeLog = 'container';
         this.followLog = true;
         this.logTabs = {};
@@ -299,9 +374,10 @@ return view.extend({
         display('maintenance', '_app_version', 'Sub-Store 版本', this.appVersion);
         display('maintenance', '_created', '容器创建时间', this.created);
         display('logs', '_logs', '运行与维护日志', logPanel);
-        display('maintenance', '_update', 'Sub-Store 镜像更新', E('div', {}, [
-            E('p', {}, ['更新官方程序；重建容器并保留数据。']),
-            this.button('更新 Sub-Store 镜像', 'update', 'positive')
+        display('maintenance', '_updates', '插件与 Sub-Store 更新', E('div', {}, [
+            E('p', {}, [this.updateStatus]),
+            E('p', { 'class': 'cbi-value-description' }, ['同时检查插件和官方镜像；有更新时自动安装并保留数据。']),
+            this.updateButton
         ]));
         const rotate = E('button', { 'class': 'cbi-button cbi-button-negative',
             click: ui.createHandlerFn(this, function() {

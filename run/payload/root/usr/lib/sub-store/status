@@ -12,6 +12,7 @@ local function command(value)
     return (sys.exec("( " .. value .. " ) 2>/dev/null") or ""):gsub("%s+$", "")
 end
 local state = "/tmp/sub-store-operation/"
+local plugin_update = "/tmp/sub-store-plugin-update/"
 local mode = arg[1] or "summary"
 local busy = sys.call("test -d /tmp/sub-store-operation/lock") == 0
 local result = {
@@ -40,5 +41,7 @@ if mode == "details" and not busy then
     result.image = command("docker inspect -f '{{.Config.Image}} / {{.Image}}' sub-store")
     result.created = command("docker inspect -f '{{.Created}}' sub-store")
     result.app_version = command("/usr/bin/sub-storectl app-version")
+    result.plugin_latest_version = read(plugin_update .. "latest-version")
+    result.plugin_update_available = read(plugin_update .. "update-available") == "1"
 end
 io.write(json.stringify(result), "\n")

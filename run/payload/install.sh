@@ -44,6 +44,7 @@ step 1 "检查系统与安装依赖"
 [ "$(id -u)" = "0" ] || fail "Run the .run installer as root."
 command -v opkg >/dev/null 2>&1 || fail "This build requires an opkg-based iStoreOS/OpenWrt 24.10.x system."
 [ -d /etc ] || fail "Cannot find the system configuration directory."
+PLUGIN_ONLY="${SUB_STORE_PLUGIN_ONLY:-0}"
 
 if [ -r /etc/openwrt_release ]; then
     . /etc/openwrt_release
@@ -53,25 +54,62 @@ if [ -r /etc/openwrt_release ]; then
     esac
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-    say "Installing Docker from the configured opkg feeds..."
-    opkg update
-    opkg install dockerd docker
+if [ "$PLUGIN_ONLY" = "1" ]; then
+    [ -f /www/luci-static/resources/form.js ] || fail "LuCI is unavailable; reinstall the full package."
+    command -v lua >/dev/null 2>&1 || fail "Lua is unavailable; reinstall the full package."
+    lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 ||
+        fail "LuCI status dependencies are unavailable; reinstall the full package."
+else
+    if ! command -v docker >/dev/null 2>&1; then
+        say "Installing Docker from the configured opkg feeds..."
+        opkg update
+        opkg install dockerd docker
+    fi
+
+    command -v docker >/dev/null 2>&1 || fail "Docker CLI is still unavailable after package installation."
+    [ -x /etc/init.d/dockerd ] || fail "The dockerd init service is missing."
+
+    if [ ! -f /www/luci-static/resources/form.js ] || ! command -v lua >/dev/null 2>&1 ||
+        ! lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 ||
+        ! command -v curl >/dev/null 2>&1 ||
+        ! opkg status rpcd-mod-file 2>/dev/null | grep -q 'Status:.*installed'; then
+        say "Installing native LuCI and RPC dependencies..."
+        opkg update
+        opkg install luci-base lua luci-lib-base luci-lib-jsonc rpcd-mod-file curl
+    fi
+    [ -f /www/luci-static/resources/form.js ] || fail "LuCI JavaScript form support is unavailable."
+    lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 || fail "LuCI status dependencies are unavailable."
 fi
 
-command -v docker >/dev/null 2>&1 || fail "Docker CLI is still unavailable after package installation."
-[ -x /etc/init.d/dockerd ] || fail "The dockerd init service is missing."
-
-if [ ! -f /www/luci-static/resources/form.js ] || ! command -v lua >/dev/null 2>&1 ||
-    ! lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 ||
-    ! command -v curl >/dev/null 2>&1 ||
-    ! opkg status rpcd-mod-file 2>/dev/null | grep -q 'Status:.*installed'; then
-    say "Installing native LuCI and RPC dependencies..."
-    opkg update
-    opkg install luci-base lua luci-lib-base luci-lib-jsonc rpcd-mod-file curl
+if [ "$PLUGIN_ONLY" = "1" ]; then
+    step 2 "只更新 LuCI 插件"
+    RUNNING_DIR="$PACKAGE_DIR/.running"
+    mkdir -p "$RUNNING_DIR/usr/bin" "$RUNNING_DIR/usr/lib/sub-store"
+    for active_file in \
+        usr/bin/sub-storectl \
+        usr/lib/sub-store/job.sh \
+        usr/lib/sub-store/plugin-update; do
+        if [ -f "/$active_file" ]; then
+            mv "/$active_file" "$RUNNING_DIR/$active_file"
+        fi
+    done
+    (umask 022; cp -R "$PACKAGE_DIR/root/." /)
+    . /usr/lib/sub-store/permissions.sh
+    sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
+    chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
+        /usr/lib/sub-store/plugin-update /etc/init.d/sub-store
+    rm -f /usr/lib/lua/luci/controller/sub_store.lua /usr/lib/lua/luci/model/cbi/sub_store.lua \
+        /usr/lib/sub-store/check-update
+    mkdir -p /etc/sub-store
+    printf '%s\n' "$PACKAGE_VERSION" >/etc/sub-store/version
+    chmod 644 /etc/sub-store/version
+    rm -f /tmp/luci-indexcache*
+    rm -rf /tmp/luci-modulecache
+    [ ! -x /etc/init.d/rpcd ] || /etc/init.d/rpcd reload
+    say "LuCI plugin updated to $PACKAGE_VERSION. The Docker image, container, and data were not changed."
+    INSTALL_OK=1
+    exit 0
 fi
-[ -f /www/luci-static/resources/form.js ] || fail "LuCI JavaScript form support is unavailable."
-lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 || fail "LuCI status dependencies are unavailable."
 
 step 2 "启动并检查 Docker"
 /etc/init.d/dockerd enable
@@ -121,7 +159,8 @@ step 4 "安装管理界面并准备配置"
 (umask 022; cp -R "$PACKAGE_DIR/root/." /)
 . /usr/lib/sub-store/permissions.sh
 sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
-chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status /etc/init.d/sub-store
+chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
+    /usr/lib/sub-store/plugin-update /etc/init.d/sub-store
 # Remove only the obsolete files shipped by this package.
 rm -f /usr/lib/lua/luci/controller/sub_store.lua /usr/lib/lua/luci/model/cbi/sub_store.lua /usr/lib/sub-store/check-update
 rm -f /tmp/luci-indexcache*

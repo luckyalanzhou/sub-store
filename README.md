@@ -41,7 +41,7 @@ chmod +x "$RUN_FILE"
 
 The installer reports six stages and points to `/tmp/sub-store-run-install.log` on failure. The iStoreOS-themed LuCI page keeps status and the Web entry visible above basic/advanced settings, logs and maintenance tabs. One scrollable panel switches between the official container runtime log and local maintenance output. Logs are requested only while that panel is visible and retain at most 512 KiB each; excess output is removed automatically. Lightweight service state continues to refresh every five seconds. Clearing maintenance output does not remove Docker logs, installer diagnostics or Sub-Store data. **Save & Apply** commits this app's settings and queues the container restart. **Save** stores settings without restarting. Maintenance tasks reserve a lock before returning to LuCI, so long image downloads do not hold the RPC request open.
 
-Install newer `.run` packages manually from GitHub Releases when needed. Updating the official Docker image remains available in LuCI. Upgrades remove old update-check files and clear LuCI's server-side module caches; if an old screen remains, sign out and back in or hard-refresh the browser. Temporary task results are cleared on router reboot.
+Use **检查更新** in LuCI to check both the GitHub Release and the official Docker image. Newer versions are downloaded and installed automatically; the plugin installer verifies SHA-256 and changes only LuCI files, while image replacement preserves the Docker data volume. LuCI reloads after confirming that the plugin version changed successfully. Manual `.run` installation remains available.
 
 ## First launch
 

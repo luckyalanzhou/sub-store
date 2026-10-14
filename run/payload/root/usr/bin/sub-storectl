@@ -762,6 +762,33 @@ case "$ACTION" in
     update)
         replace_container update
         ;;
+    update-all)
+        image_result=0
+        plugin_result=0
+        echo '检查并更新 Sub-Store Docker 镜像...'
+        if ( "$0" update ); then
+            echo 'Docker 镜像检查完成。'
+        else
+            image_result=$?
+            echo "Docker 镜像更新失败，退出码：$image_result"
+        fi
+        echo '检查并更新 LuCI 插件...'
+        if /usr/lib/sub-store/plugin-update install-if-newer; then
+            echo 'LuCI 插件检查完成。'
+        else
+            plugin_result=$?
+            echo "LuCI 插件更新失败，退出码：$plugin_result"
+        fi
+        if [ "$image_result" -ne 0 ] || [ "$plugin_result" -ne 0 ]; then
+            fail 'One or more update operations failed; see the maintenance log.'
+        fi
+        ;;
+    check-plugin-update)
+        /usr/lib/sub-store/plugin-update check
+        ;;
+    install-plugin-update)
+        /usr/lib/sub-store/plugin-update install
+        ;;
     rotate-key)
         NEW_PATH="$(new_api_path)"
         [ "${#NEW_PATH}" -eq 48 ] || fail "could not generate API path"
@@ -792,6 +819,6 @@ case "$ACTION" in
         uninstall_plugin "${2:-}"
         ;;
     *)
-        fail "usage: sub-storectl {status|health|app-version|url|api-url|storage|logs|check|render|import-legacy|start|stop|restart|pull|update|rotate-key|remove-container|export-data|uninstall}"
+        fail "usage: sub-storectl {status|health|app-version|url|api-url|storage|logs|check|check-plugin-update|install-plugin-update|render|import-legacy|start|stop|restart|pull|update|update-all|rotate-key|remove-container|export-data|uninstall}"
         ;;
 esac

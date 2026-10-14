@@ -9,7 +9,7 @@ else
     ACTION="$MODE"
 fi
 case "$ACTION" in
-    start|stop|restart|update|rotate-key|check|logs|clear-logs) ;;
+    start|stop|restart|update|update-all|rotate-key|check|check-plugin-update|install-plugin-update|logs|clear-logs) ;;
     *) echo "Unsupported action" >&2; exit 1 ;;
 esac
 if [ "$MODE" = "--enqueue" ] && ! command -v nohup >/dev/null 2>&1; then

@@ -29,6 +29,12 @@ run_sh "$TMP/job" check
 grep -q '操作成功' "$TMP/state/status"
 grep -q 'operation output: check' "$TMP/state/output.log"
 [ ! -d "$TMP/state/lock" ]
+run_sh "$TMP/job" check-plugin-update
+grep -q 'operation output: check-plugin-update' "$TMP/state/output.log"
+grep -q 'check-plugin-update' "$TMP/state/action"
+run_sh "$TMP/job" update-all
+grep -q 'operation output: update-all' "$TMP/state/output.log"
+grep -q 'update-all' "$TMP/state/action"
 result=0
 run_sh "$TMP/job" update || result=$?
 [ "$result" -eq 7 ]
