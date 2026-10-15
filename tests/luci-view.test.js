@@ -78,11 +78,14 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.doesNotMatch(source, /完整地址含 API 参数/);
     assert.doesNotMatch(source, /sub-store-maintenance-(?:panel|card|row)/);
     assert.doesNotMatch(source, /#cbi-sub-store-main-_maintenance/);
-    assert.match(source, /max-width:1480px/);
-    assert.match(source, /@media\(min-width:900px\).*grid-template-columns:minmax\(12rem,18rem\) minmax\(0,1fr\)/);
+    assert.match(source, /max-width:1320px/);
+    assert.doesNotMatch(source, /grid-template-columns:minmax\(12rem,18rem\)/);
+    assert.doesNotMatch(source, /\.cbi-value\{display:grid!important/);
     assert.match(source, /background:var\(--background-color-high,transparent\)/);
-    assert.match(source, /@media\(max-width:899px\)/);
+    assert.match(source, /@media\(max-width:767px\)/);
     assert.doesNotMatch(source, /prefers-color-scheme:dark/);
+    assert.match(source, /\.cbi-value-field\{min-width:0\}/);
+    assert.match(source, /--border-color/);
     assert.match(source, /#cbi-sub-store-main-_logs/);
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBoxes.container.textContent, 'runtime log');
