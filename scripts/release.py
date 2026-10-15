@@ -414,12 +414,6 @@ def publish() -> None:
         raise ReleaseError(f"Release tag mismatch: expected {expected_tag}, got {env['TAG']}")
     parse_version(version)
 
-    notes = Path("dist/release-notes.md").read_text(encoding="utf-8")
-    include_native = NATIVE_PACKAGE_MARKER in notes
-    names = release_asset_names(version, include_native=include_native)
-    package_paths = [Path("dist") / name for name in names if not name.endswith(".sha256")]
-    package_asset_names = [name for name in names if not name.endswith(".sha256")]
-
     existing = get_release_by_tag(repo, env["TAG"])
     if not existing.get("draft", False):
         if published_release_is_complete(repo, existing, version):
@@ -427,6 +421,12 @@ def publish() -> None:
                 print(f"sub-store v{version} is already complete for workflow run {env['GITHUB_RUN_ID']}.")
                 return
             raise ReleaseError(f"Refusing to overwrite complete release {env['TAG']}")
+
+    notes = Path("dist/release-notes.md").read_text(encoding="utf-8")
+    include_native = NATIVE_PACKAGE_MARKER in notes
+    names = release_asset_names(version, include_native=include_native)
+    package_paths = [Path("dist") / name for name in names if not name.endswith(".sha256")]
+    package_asset_names = [name for name in names if not name.endswith(".sha256")]
 
     digest = verify_files(Path("dist"), version)
     if digest is None or not verify_release_files(Path("dist"), version, include_native=include_native):

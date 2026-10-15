@@ -248,9 +248,11 @@ class ReleaseVersionTests(unittest.TestCase):
         }), \
              patch("release.list_api_pages", return_value=[release_data]), \
              patch("release.published_release_is_complete", return_value=True), \
-             patch("release.verify_files") as verify_mock:
+             patch("release.verify_files") as verify_mock, \
+             patch("release.Path.read_text", side_effect=FileNotFoundError("dist/release-notes.md")) as read_notes_mock:
             publish()
         verify_mock.assert_not_called()
+        read_notes_mock.assert_not_called()
 
 
 if __name__ == "__main__":
