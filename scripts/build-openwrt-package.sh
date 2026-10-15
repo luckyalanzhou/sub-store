@@ -99,7 +99,13 @@ for package in \
 done
 make -C "$SDK_DIR" defconfig
 grep -Fxq 'CONFIG_PACKAGE_luci-app-sub-store=m' "$SDK_DIR/.config" || {
-	echo "OpenWrt SDK did not keep luci-app-sub-store selected; check package feeds and dependencies." >&2
+	echo "OpenWrt SDK did not keep luci-app-sub-store selected." >&2
+	echo "Effective package settings:" >&2
+	grep -E '^(CONFIG_PACKAGE_(luci-app-sub-store|luci-base|luci-lib-base|luci-lib-jsonc|lua|rpcd-mod-file|curl|jsonfilter|docker|dockerd)=|# CONFIG_PACKAGE_(luci-app-sub-store|luci-base|luci-lib-base|luci-lib-jsonc|lua|rpcd-mod-file|curl|jsonfilter|docker|dockerd) is not set)' "$SDK_DIR/.config" >&2 || true
+	if [ -f "$SDK_DIR/tmp/.config-package.in" ]; then
+		echo "Generated Kconfig entry:" >&2
+		grep -n -A12 -B2 '^config PACKAGE_luci-app-sub-store$' "$SDK_DIR/tmp/.config-package.in" >&2 || true
+	fi
 	exit 1
 }
 
