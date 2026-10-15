@@ -58,6 +58,14 @@ PACKAGE_DIR="$SDK_DIR/package/utils/luci-app-sub-store"
 mkdir -p "$PACKAGE_DIR"
 cp -R "$ROOT/openwrt/luci-app-sub-store/." "$PACKAGE_DIR/"
 
+# Register the official release-matched LuCI and packages feeds so Kconfig can
+# resolve the plugin's declared runtime dependencies.
+(
+	cd "$SDK_DIR"
+	./scripts/feeds update packages luci
+	./scripts/feeds install -a
+)
+
 # SDK archives do not include an initialized .config; defconfig avoids an interactive menuconfig prompt in CI.
 make -C "$SDK_DIR" defconfig
 
