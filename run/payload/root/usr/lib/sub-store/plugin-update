@@ -5,7 +5,6 @@ REPOSITORY=luckyalanzhou/sub-store
 RELEASE_API="https://api.github.com/repos/$REPOSITORY/releases/latest"
 STATE_DIR=/tmp/sub-store-plugin-update
 CURRENT_VERSION_FILE=/etc/sub-store/version
-PACKAGE_FORMAT_FILE=/etc/sub-store/package-format
 MODE="${1:-}"
 
 fail() {
@@ -120,12 +119,7 @@ fi
 
 [ "$update_available" = "1" ] || fail "No newer plugin Release is available."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is unavailable."
-package_format="$(cat "$PACKAGE_FORMAT_FILE" 2>/dev/null || true)"
-case "$package_format" in
-    ipk) package_name="sub-store-$latest_version-openwrt-24.10.ipk" ;;
-    apk) package_name="sub-store-$latest_version-openwrt-25.12.apk" ;;
-    *) package_format=run; package_name="sub-store-$latest_version.run" ;;
-esac
+package_name="sub-store-$latest_version.run"
 package="$TEMP_DIR/$package_name"
 checksum="$package.sha256"
 release_url="https://github.com/$REPOSITORY/releases/download/v$latest_version"
@@ -148,24 +142,10 @@ expected_hash="$(awk -v expected_file="$package_name" '
 actual_hash="$(sha256sum "$package" | awk '{print tolower($1)}')"
 [ "$actual_hash" = "$expected_hash" ] || fail "Package SHA-256 verification failed."
 
-case "$package_format" in
-    run)
-        chmod 700 "$package"
-        "$package" --check || fail "The self-extracting installer failed its archive check."
-        echo "Verified $package_name (SHA-256). Installing the LuCI plugin only..."
-        SUB_STORE_PLUGIN_ONLY=1 "$package"
-        ;;
-    ipk)
-        command -v opkg >/dev/null 2>&1 || fail "opkg is unavailable for the installed IPK package."
-        echo "Verified $package_name (SHA-256). Updating with opkg..."
-        opkg install "$package" || fail "opkg could not install the updated LuCI package."
-        ;;
-    apk)
-        command -v apk >/dev/null 2>&1 || fail "apk is unavailable for the installed APK package."
-        echo "Verified $package_name (SHA-256). Updating with apk..."
-        apk add --allow-untrusted "$package" || fail "apk could not install the updated LuCI package."
-        ;;
-esac
+chmod 700 "$package"
+"$package" --check || fail "The self-extracting installer failed its archive check."
+echo "Verified $package_name (SHA-256). Installing the LuCI plugin only..."
+SUB_STORE_PLUGIN_ONLY=1 "$package"
 
 installed_version="$(cat "$CURRENT_VERSION_FILE" 2>/dev/null || true)"
 [ "$installed_version" = "$latest_version" ] || fail "The installer returned without installing the requested plugin version."

@@ -6,6 +6,4 @@ Thumbs.db
 dist/
 *.run
 *.tar.gz
-*.ipk
-*.apk
 *.tmp

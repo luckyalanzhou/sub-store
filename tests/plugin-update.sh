@@ -9,7 +9,6 @@ mkdir -p "$TMP/bin"
 SOURCE="$ROOT/run/payload/root/usr/lib/sub-store/plugin-update"
 sed -e "s|STATE_DIR=/tmp/sub-store-plugin-update|STATE_DIR=$TMP/state|" \
     -e "s|CURRENT_VERSION_FILE=/etc/sub-store/version|CURRENT_VERSION_FILE=$TMP/current-version|" \
-    -e "s|PACKAGE_FORMAT_FILE=/etc/sub-store/package-format|PACKAGE_FORMAT_FILE=$TMP/package-format|" \
     "$SOURCE" > "$TMP/plugin-update"
 chmod 755 "$TMP/plugin-update"
 
@@ -54,15 +53,6 @@ case "$url" in
     *.run)
         cp "$TEST_INSTALLER" "$output"
         ;;
-    *.ipk.sha256|*.apk.sha256)
-        hash="$(sha256sum "$TEST_NATIVE_PACKAGE" | awk '{print $1}')"
-        name="${url##*/}"
-        name="${name%.sha256}"
-        printf '%s  %s\n' "$hash" "$name" > "$output"
-        ;;
-    *.ipk|*.apk)
-        cp "$TEST_NATIVE_PACKAGE" "$output"
-        ;;
     *) echo "Unexpected URL: $url" >&2; exit 1 ;;
 esac
 EOF
@@ -80,31 +70,9 @@ printf '%s\n' "$TEST_RELEASE_VERSION" > "$TEST_CURRENT_VERSION"
 echo 'LuCI files installed without a Docker command.'
 EOF
 chmod 755 "$TMP/fake-installer"
-cat > "$TMP/bin/opkg" <<'EOF'
-#!/bin/sh
-set -eu
-[ "${1:-}" = install ] || exit 21
-package_path=""
-for arg do package_path="$arg"; done
-[ -s "$package_path" ] || exit 22
-printf '%s\n' "$TEST_RELEASE_VERSION" > "$TEST_CURRENT_VERSION"
-echo 'Fake opkg installed the package.'
-EOF
-cat > "$TMP/bin/apk" <<'EOF'
-#!/bin/sh
-set -eu
-[ "${1:-}" = add ] && [ "${2:-}" = --allow-untrusted ] || exit 23
-package_path=""
-for arg do package_path="$arg"; done
-[ -s "$package_path" ] || exit 24
-printf '%s\n' "$TEST_RELEASE_VERSION" > "$TEST_CURRENT_VERSION"
-echo 'Fake apk installed the package.'
-EOF
-chmod 755 "$TMP/bin/opkg" "$TMP/bin/apk"
 printf '%s\n' 1.2.9999999999999999999 > "$TMP/current-version"
 export TEST_RELEASE_VERSION=1.3.0
 export TEST_INSTALLER="$TMP/fake-installer"
-export TEST_NATIVE_PACKAGE="$TMP/fake-native-package"
 export TEST_CURRENT_VERSION="$TMP/current-version"
 export TEST_CURL_LOG="$TMP/curl.log"
 : > "$TEST_CURL_LOG"
@@ -139,19 +107,4 @@ asset_requests_after="$(grep -Ec '/sub-store-[^/]+\.run(\.sha256)?$' "$TEST_CURL
     exit 1
 }
 
-printf '%s\n' ipk > "$TMP/package-format"
-printf '%s\n' 1.3.0 > "$TMP/current-version"
-export TEST_RELEASE_VERSION=1.4.0
-printf '%s\n' 'fake IPK payload' > "$TEST_NATIVE_PACKAGE"
-"$TMP/plugin-update" install > "$TMP/ipk-install.log"
-[ "$(cat "$TMP/current-version")" = 1.4.0 ]
-grep -qi 'updating with opkg' "$TMP/ipk-install.log"
-
-printf '%s\n' apk > "$TMP/package-format"
-export TEST_RELEASE_VERSION=1.5.0
-printf '%s\n' 'fake APK payload' > "$TEST_NATIVE_PACKAGE"
-"$TMP/plugin-update" install > "$TMP/apk-install.log"
-[ "$(cat "$TMP/current-version")" = 1.5.0 ]
-grep -qi 'updating with apk' "$TMP/apk-install.log"
-
-echo 'Plugin release check, checksummed .run/.ipk/.apk updates, package-manager selection and no-op update passed.'
+echo 'Plugin release check, checksummed .run updates and no-op update passed.'

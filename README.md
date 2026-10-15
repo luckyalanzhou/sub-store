@@ -16,30 +16,7 @@
 
 ## 下载与安装
 
-从 [Releases](https://github.com/luckyalanzhou/sub-store/releases) 下载适合系统版本的包。各版本实际提供的附件以 Release 页面为准。
-
-| 系统 | 安装包 | 安装方式 |
-| --- | --- | --- |
-| iStoreOS 24.10 | `.run` | iStore → 手动安装；自解压部署安装器 |
-| iStoreOS / OpenWrt 24.10 | `.ipk` | 系统 → 软件包 → 上传安装，或 `opkg install` |
-| iStoreOS 25.12 | `.apk` | 支持 APK 上传的新版 iStore，或 `apk add --allow-untrusted` |
-| OpenWrt 25.12 | `.apk` | `apk add --allow-untrusted`；未安装 iStore 时使用命令行 |
-
-iStore「手动安装」可安装 `.run` 和 `.ipk`；支持 APK 上传的新版页面也可安装 `.apk`。`.run` 会执行自解压安装器，原生包交给设备对应的包管理器。请按系统版本选择匹配的原生包。通用 OpenWrt 不一定预装 iStore；没有 iStore 或页面不接受 `.apk` 时，通过 SSH 使用对应包管理器。25.12 的系统软件页面可能拒绝未签名的本地 `.apk`，可用 `apk add --allow-untrusted` 安装。
-
-终端安装原生包示例，将版本号改为所下载附件的版本，并只执行与设备系统匹配的一组命令：
-
-```sh
-VERSION=0.0.1
-opkg install "./sub-store-${VERSION}-openwrt-24.10.ipk"
-```
-
-```sh
-VERSION=0.0.1
-apk add --allow-untrusted "./sub-store-${VERSION}-openwrt-25.12.apk"
-```
-
-按设备系统选择对应命令。安装和首次启动需要网络，以便安装 Docker 依赖并拉取官方镜像；原生 `.ipk`、`.apk` 是否能解析依赖，取决于设备配置的软件源。
+从 [Releases](https://github.com/luckyalanzhou/sub-store/releases) 下载 `.run` 自解压安装器，在 **iStore → 手动安装**上传并安装。安装器面向 iStoreOS 24.10.x（opkg 系统）。首次启动需要联网安装 Docker 依赖并拉取官方镜像。
 
 `.sha256` 不影响手动安装，但 Release 校验和 LuCI 插件自动更新需要它，请保留。它用于校验文件完整性，不是发布者签名。
 
@@ -61,8 +38,7 @@ sub-storectl logs
 
 - 版本使用 `MAJOR.MINOR.PATCH`。在 **Actions → Build sub-store installer → Run workflow** 手动启动发布，选择 `main` 和 `patch`、`minor` 或 `major`。
 - 普通代码推送不会发布安装包；项目不构建自有 Docker 镜像，使用官方 `xream/sub-store` 镜像。
-- 正式发布工作流为 iStoreOS 24.10 构建 `.run`，为 iStoreOS/OpenWrt 24.10 构建 `.ipk`，为 iStoreOS/OpenWrt 25.12 构建 `.apk`，并生成 SHA-256 校验文件。
-- `.run` 面向 iStoreOS 24.10；`.ipk` 面向使用 `opkg` 的 24.10 系统；`.apk` 面向使用 `apk` 的 25.12 系统。
+- 正式发布仅构建 `.run` 自解压安装器及其 SHA-256 校验文件，面向 iStoreOS 24.10.x。
 
 ## 开源协议
 

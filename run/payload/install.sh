@@ -345,7 +345,6 @@ uci commit sub-store
 chmod 600 /etc/config/sub-store
 
 step 6 "完成安装并输出访问入口"
-rm -f /etc/sub-store/package-format
 printf '%s\n' "$PACKAGE_VERSION" >/etc/sub-store/version
 chmod 644 /etc/sub-store/version
 
