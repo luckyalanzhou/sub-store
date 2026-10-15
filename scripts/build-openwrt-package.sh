@@ -61,9 +61,27 @@ cp -R "$ROOT/openwrt/luci-app-sub-store/." "$PACKAGE_DIR/"
 # SDK archives do not include an initialized .config; defconfig avoids an interactive menuconfig prompt in CI.
 make -C "$SDK_DIR" defconfig
 
+# A direct package/compile target can succeed without producing an artifact when
+# the package is not selected in Kconfig. Build it as a module, like selecting
+# <M> in menuconfig, and verify that the SDK retained the selection.
+PACKAGE_CONFIG='CONFIG_PACKAGE_luci-app-sub-store=m'
+if grep -q '^CONFIG_PACKAGE_luci-app-sub-store=' "$SDK_DIR/.config"; then
+	sed -i 's/^CONFIG_PACKAGE_luci-app-sub-store=.*/CONFIG_PACKAGE_luci-app-sub-store=m/' "$SDK_DIR/.config"
+elif grep -q '^# CONFIG_PACKAGE_luci-app-sub-store is not set$' "$SDK_DIR/.config"; then
+	sed -i 's/^# CONFIG_PACKAGE_luci-app-sub-store is not set$/CONFIG_PACKAGE_luci-app-sub-store=m/' "$SDK_DIR/.config"
+else
+	printf '\n%s\n' "$PACKAGE_CONFIG" >> "$SDK_DIR/.config"
+fi
+make -C "$SDK_DIR" defconfig
+grep -Fxq "$PACKAGE_CONFIG" "$SDK_DIR/.config" || {
+	echo "OpenWrt SDK did not keep luci-app-sub-store selected; check package feeds and dependencies." >&2
+	exit 1
+}
+
 make -C "$SDK_DIR" package/utils/luci-app-sub-store/compile V=s \
 	SUB_STORE_VERSION="$VERSION" SUB_STORE_SOURCE_ROOT="$ROOT" \
 	SUB_STORE_PACKAGE_FORMAT="$PACKAGE_FORMAT"
+make -C "$SDK_DIR" package/index
 
 BUILT_PACKAGE="$(find "$SDK_DIR/bin/packages" -type f -name "luci-app-sub-store*.$EXT" -print -quit)"
 [ -n "$BUILT_PACKAGE" ] && [ -s "$BUILT_PACKAGE" ] || {
