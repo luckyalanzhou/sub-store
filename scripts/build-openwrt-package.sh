@@ -58,6 +58,9 @@ PACKAGE_DIR="$SDK_DIR/package/utils/luci-app-sub-store"
 mkdir -p "$PACKAGE_DIR"
 cp -R "$ROOT/openwrt/luci-app-sub-store/." "$PACKAGE_DIR/"
 
+# SDK archives do not include an initialized .config; defconfig avoids an interactive menuconfig prompt in CI.
+make -C "$SDK_DIR" defconfig
+
 make -C "$SDK_DIR" package/utils/luci-app-sub-store/compile V=s \
 	SUB_STORE_VERSION="$VERSION" SUB_STORE_SOURCE_ROOT="$ROOT" \
 	SUB_STORE_PACKAGE_FORMAT="$PACKAGE_FORMAT"
