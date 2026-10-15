@@ -1,0 +1,4 @@
+config settings 'main'
+	option frontend_port '3001'
+	option backend_port '3000'
+	option sync_cron '55 23 * * *'

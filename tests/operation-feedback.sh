@@ -25,9 +25,17 @@ run_sh() {
     if [ "${BUSYBOX_TEST:-0}" = "1" ]; then busybox ash "$@"; else sh "$@"; fi
 }
 export SLOW_UPDATE="$TMP/slow-update"
-run_sh "$TMP/job" check
+if run_sh "$TMP/job" check; then
+    echo 'The removed manual service check is still accepted.' >&2
+    exit 1
+fi
+run_sh "$TMP/job" clear-runtime-logs
+grep -q 'operation output: clear-runtime-logs' "$TMP/state/output.log"
+run_sh "$TMP/job" clear-maintenance-logs
+grep -q 'operation output: clear-maintenance-logs' "$TMP/state/output.log"
+run_sh "$TMP/job" start
 grep -q '操作成功' "$TMP/state/status"
-grep -q 'operation output: check' "$TMP/state/output.log"
+grep -q 'operation output: start' "$TMP/state/output.log"
 [ ! -d "$TMP/state/lock" ]
 run_sh "$TMP/job" check-plugin-update
 grep -q 'operation output: check-plugin-update' "$TMP/state/output.log"

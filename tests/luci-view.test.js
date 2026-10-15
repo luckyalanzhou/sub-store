@@ -50,9 +50,14 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.options.api_path.password, true);
     assert.equal(t.polls.length, 1);
     assert.equal(t.view.open.href, t.state.url);
-    assert.equal(t.view.open.children[0], '点击打开 sub-store');
+    assert.equal(t.view.open.children[0], '打开 sub-store');
     assert.match(t.view.open.class, /sub-store-open-button/);
     assert.equal(t.view.address['aria-label'], '访问地址');
+    assert.equal(t.view.copyAddressButton.children[0], '复制');
+    assert.equal(t.view.copyAddressButton['aria-label'], '复制访问地址');
+    assert.equal(t.view.copyAddressButton.disabled, false);
+    const addressControl = page.children[2].children[5].children[1];
+    assert.deepEqual(addressControl.children, [t.view.address, t.view.copyAddressButton]);
     assert.equal(t.view.status.textContent, 'sub-store 服务已启动');
     assert.equal(t.view.status.className, 'sub-store-status is-running');
     assert.equal(t.view.startButton.disabled, true);
@@ -76,21 +81,19 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.match(source, /#cbi-sub-store-main-_image,.sub-store-page #cbi-sub-store-main-_app_version,.sub-store-page #cbi-sub-store-main-_created\{align-items:center\}/);
     assert.match(source, /#cbi-sub-store-main-_logs/);
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
-    assert.equal(t.view.logBox.textContent, 'runtime log');
-    assert.equal(t.view.clearLogsButton.hidden, true);
-    t.view.logTabs.operation.click();
-    assert.equal(t.view.logBox.textContent, 'maintenance log');
-    assert.equal(t.view.clearLogsButton.hidden, false);
-    t.view.clearLogsButton.click();
-    assert.equal(t.calls.find(call => call[0] === 'modal')[1], '清空维护日志');
-    t.view.logTabs.container.click();
-    assert.equal(t.view.logBox.textContent, 'runtime log');
-    assert.equal(t.view.clearLogsButton.hidden, true);
-    assert.deepEqual(Object.keys(t.view.logTabs).sort(), ['container', 'operation']);
+    assert.equal(t.view.logBoxes.container.textContent, 'runtime log');
+    assert.equal(t.view.logBoxes.operation.textContent, 'maintenance log');
+    assert.equal(t.view.logPanel.children.length, 2);
+    assert.equal(t.view.clearLogButtons.container.children[0], '清空日志');
+    assert.equal(t.view.clearLogButtons.operation.children[0], '清空日志');
+    assert.equal(t.view.logPanel.children[0].children[0].children[0].children[0], '运行日志');
+    assert.equal(t.view.logPanel.children[1].children[0].children[0].children[0], '维护日志');
     assert.doesNotMatch(source, /刷新日志/);
     t.state.container_log = 'refreshed runtime log';
+    t.state.output = 'refreshed maintenance log';
     await t.polls[0]();
-    assert.equal(t.view.logBox.textContent, 'refreshed runtime log');
+    assert.equal(t.view.logBoxes.container.textContent, 'refreshed runtime log');
+    assert.equal(t.view.logBoxes.operation.textContent, 'refreshed maintenance log');
     t.options.frontend_port.input = '3001';
     assert.notEqual(t.options.backend_port.validate('main', '3001'), true);
     assert.equal(t.options.backend_port.validate('main', '3000'), true);
@@ -288,15 +291,35 @@ test('XHR timeout keeps controls locked until polling confirms no task started',
 test('logs are displayed as text and stopped container hides open link', async () => {
     const t = setup(); t.state.container_log = '<script>unsafe</script>'; t.state.container = 'exited';
     await t.view.render(await t.view.load());
-    assert.equal(t.view.logBox.textContent, '<script>unsafe</script>');
+    assert.equal(t.view.logBoxes.container.textContent, '<script>unsafe</script>');
     assert.equal(t.view.open.hidden, true);
 });
-test('service check switches to maintenance output', async () => {
+test('service diagnostics stay automatic without a manual log action', async () => {
     const t = setup(); await t.view.render(await t.view.load());
-    await t.view.run('check');
-    await t.view.enqueueTask;
-    assert.equal(t.view.activeLog, 'operation');
-    assert.deepEqual(t.calls.find(call => call[0].endsWith('job.sh'))[1], ['--enqueue', 'check']);
+    assert.equal(t.view.logPanel.children.length, 2);
+    assert.equal(t.view.logPanel.children[0].children[0].children[1].children[0], t.view.clearLogButtons.container);
+    assert.equal(t.view.logPanel.children[1].children[0].children[1].children[0], t.view.clearLogButtons.operation);
+    assert.doesNotMatch(source, /检查服务|action === 'check'/);
+    const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');
+    assert.doesNotMatch(controller, /^\s*check\)/m);
+    assert.match(controller, /docker exec -i sub-store node --input-type=commonjs - < "\$HEALTHCHECK"/);
+});
+test('each separate log has its own clear action and preserves distinct behavior', async () => {
+    for (const [name, expectedAction, expectedMessage, containerStatus] of [
+        ['container', 'clear-runtime-logs', '清空运行日志需要短暂重启服务；数据卷保留。'],
+        ['operation', 'clear-maintenance-logs', '只清空维护日志，不影响运行日志和数据卷。'],
+        ['container', 'clear-runtime-logs', '清空运行日志，不会启动已停止的服务；数据卷保留。', 'exited']
+    ]) {
+        const t = setup(); await t.view.render(await t.view.load());
+        if (containerStatus) t.view.state.container = containerStatus;
+        t.view.clearLogButtons[name].click();
+        const modal = t.calls.find(call => call[0] === 'modal');
+        assert.equal(modal[1], '清空日志');
+        assert.equal(modal[2][0].children[0], expectedMessage);
+        await modal[2][1].children[2].click();
+        await t.view.enqueueTask;
+        assert.deepEqual(t.calls.find(call => call[0].endsWith('job.sh'))[1], ['--enqueue', expectedAction]);
+    }
 });
 test('menu and ACL expose only this configuration and fixed helper paths', () => {
     const root = 'run/payload/root/usr/share/';

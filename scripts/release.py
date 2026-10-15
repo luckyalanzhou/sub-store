@@ -17,6 +17,7 @@ from release_version import format_version, next_version, parse_tag, parse_versi
 
 
 RUN_MARKER_RE = re.compile(r"<!-- sub-store-run-ids: ([0-9,]+) -->")
+NATIVE_PACKAGE_MARKER = "<!-- sub-store-native-packages: 24.10,25.12 -->"
 
 
 class ReleaseError(RuntimeError):
@@ -108,22 +109,78 @@ def verify_files(directory: Path, version: str, expected_digest: str | None = No
     return digest
 
 
+def native_package_names(version: str) -> tuple[str, str]:
+    return (
+        f"sub-store-{version}-openwrt-24.10.ipk",
+        f"sub-store-{version}-openwrt-25.12.apk",
+    )
+
+
+def verify_asset(directory: Path, asset_name: str) -> str | None:
+    package_path = directory / asset_name
+    checksum_path = directory / f"{asset_name}.sha256"
+    if not package_path.is_file() or not checksum_path.is_file():
+        return None
+    try:
+        checksum_line = checksum_path.read_text(encoding="ascii").strip()
+    except UnicodeDecodeError:
+        return None
+    match = re.fullmatch(r"([0-9a-f]{64})[ \t]+\*?" + re.escape(asset_name), checksum_line)
+    if not match:
+        return None
+    digest = file_digest(package_path)
+    return digest if digest == match.group(1) else None
+
+
+def release_asset_names(version: str, *, include_native: bool) -> tuple[str, ...]:
+    run_name = f"sub-store-{version}.run"
+    names = [run_name, f"{run_name}.sha256"]
+    if include_native:
+        for package_name in native_package_names(version):
+            names.extend((package_name, f"{package_name}.sha256"))
+    return tuple(names)
+
+
+def verify_release_files(
+    directory: Path,
+    version: str,
+    *,
+    include_native: bool,
+    expected_digests: dict[str, str] | None = None,
+) -> bool:
+    run_name = f"sub-store-{version}.run"
+    expected_digests = expected_digests or {}
+    if verify_files(directory, version, expected_digest=expected_digests.get(run_name)) is None:
+        return False
+    if include_native:
+        for name in native_package_names(version):
+            digest = verify_asset(directory, name)
+            if digest is None or (name in expected_digests and digest != expected_digests[name]):
+                return False
+    return True
+
+
+def release_includes_native_packages(release: dict[str, Any]) -> bool:
+    return NATIVE_PACKAGE_MARKER in str(release.get("body", ""))
+
+
 def published_release_is_complete(repo: str, release: dict[str, Any], version: str) -> bool:
-    package_name = f"sub-store-{version}.run"
-    checksum_name = f"{package_name}.sha256"
+    include_native = release_includes_native_packages(release)
+    names = release_asset_names(version, include_native=include_native)
     assets = asset_map(release)
-    if any(name not in assets or int(assets[name].get("size", 0)) <= 0 for name in (package_name, checksum_name)):
+    if any(name not in assets or int(assets[name].get("size", 0)) <= 0 for name in names):
         return False
 
     with tempfile.TemporaryDirectory(prefix="sub-store-release-check-") as temp:
-        command([
+        args = [
             "gh", "release", "download", release["tag_name"],
             "--repo", repo,
-            "--pattern", package_name,
-            "--pattern", checksum_name,
-            "--dir", temp,
-        ])
-        return verify_files(Path(temp), version) is not None
+        ]
+        for name in names:
+            args.extend(("--pattern", name))
+        args.extend(("--dir", temp))
+        command(args)
+        return verify_release_files(Path(temp), version, include_native=include_native)
 
 
 def matching_version(value: str) -> tuple[int, int, int] | None:
@@ -357,10 +414,11 @@ def publish() -> None:
         raise ReleaseError(f"Release tag mismatch: expected {expected_tag}, got {env['TAG']}")
     parse_version(version)
 
-    package_name = f"sub-store-{version}.run"
-    checksum_name = f"{package_name}.sha256"
-    package_path = Path("dist") / package_name
-    checksum_path = Path("dist") / checksum_name
+    notes = Path("dist/release-notes.md").read_text(encoding="utf-8")
+    include_native = NATIVE_PACKAGE_MARKER in notes
+    names = release_asset_names(version, include_native=include_native)
+    package_paths = [Path("dist") / name for name in names if not name.endswith(".sha256")]
+    package_asset_names = [name for name in names if not name.endswith(".sha256")]
 
     existing = get_release_by_tag(repo, env["TAG"])
     if not existing.get("draft", False):
@@ -371,11 +429,17 @@ def publish() -> None:
             raise ReleaseError(f"Refusing to overwrite complete release {env['TAG']}")
 
     digest = verify_files(Path("dist"), version)
-    if digest is None:
-        raise ReleaseError("Local installer or SHA-256 checksum is missing or invalid")
-    notes = Path("dist/release-notes.md").read_text(encoding="utf-8")
+    if digest is None or not verify_release_files(Path("dist"), version, include_native=include_native):
+        raise ReleaseError("A local installation package or its SHA-256 checksum is missing or invalid")
+    expected_digests = {
+        name: file_digest(Path("dist") / name)
+        for name in names
+        if not name.endswith(".sha256")
+    }
     if f"<!-- sub-store-run-ids: {env['RUN_IDS']} -->" not in notes:
         raise ReleaseError("Release notes are missing this run's recovery marker")
+    if include_native and NATIVE_PACKAGE_MARKER not in notes:
+        raise ReleaseError("Release notes are missing the native-package marker")
 
     if not existing.get("draft", False):
         # Repair an incomplete published release under the same version, keeping it hidden until verified.
@@ -391,8 +455,8 @@ def publish() -> None:
         "gh", "release", "upload", env["TAG"],
         "--repo", repo,
         "--clobber",
-        str(package_path),
-        str(checksum_path),
+        *[str(path) for path in package_paths],
+        *[str(Path("dist") / f"{name}.sha256") for name in package_asset_names],
     ])
     command([
         "gh", "release", "edit", env["TAG"],
@@ -406,29 +470,34 @@ def publish() -> None:
     if not release.get("draft", False):
         raise ReleaseError("Release left draft state before asset verification")
     assets = asset_map(release)
-    for name in (package_name, checksum_name):
+    for name in names:
         if name not in assets or int(assets[name].get("size", 0)) <= 0:
             raise ReleaseError(f"Release asset is missing or empty: {name}")
 
     with tempfile.TemporaryDirectory(prefix="sub-store-release-verify-") as temp:
-        command([
+        args = [
             "gh", "release", "download", env["TAG"],
             "--repo", repo,
-            "--pattern", package_name,
-            "--pattern", checksum_name,
-            "--dir", temp,
-        ])
+        ]
+        for name in names:
+            args.extend(("--pattern", name))
+        args.extend(("--dir", temp))
+        command(args)
+        if not verify_release_files(
+            Path(temp), version, include_native=include_native, expected_digests=expected_digests
+        ):
+            raise ReleaseError("Uploaded installation packages failed remote SHA-256 verification")
         remote_digest = verify_files(Path(temp), version, expected_digest=digest)
         if remote_digest is None:
-            raise ReleaseError("Uploaded installer and checksum failed remote SHA-256 verification")
+            raise ReleaseError("Uploaded installer failed remote SHA-256 verification")
 
     command(["gh", "release", "edit", env["TAG"], "--repo", repo, "--draft=false"])
     final_release = get_release_by_tag(repo, env["TAG"])
     if final_release.get("draft", True) or not final_release.get("published_at"):
         raise ReleaseError("Release assets verified, but GitHub did not confirm publication")
     final_assets = asset_map(final_release)
-    if any(name not in final_assets or int(final_assets[name].get("size", 0)) <= 0 for name in (package_name, checksum_name)):
-        raise ReleaseError("Published release is missing an installer or checksum asset")
+    if any(name not in final_assets or int(final_assets[name].get("size", 0)) <= 0 for name in names):
+        raise ReleaseError("Published release is missing an installation package or checksum asset")
     print(f"Published sub-store v{version}; SHA-256 {digest} verified.")
 
 

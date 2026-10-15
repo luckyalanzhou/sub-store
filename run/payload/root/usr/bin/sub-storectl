@@ -611,12 +611,37 @@ replace_container() {
     fail "new container failed to start; the previous container has been restored when available"
 }
 
+clear_runtime_logs() {
+    [ -d /tmp/sub-store-operation/lock ] &&
+        [ "$(cat /tmp/sub-store-operation/action 2>/dev/null || true)" = "clear-runtime-logs" ] ||
+        fail "runtime logs can only be cleared through the queued LuCI action"
+    docker inspect sub-store >/dev/null 2>&1 || fail "Sub-Store container does not exist"
+    assert_sub_store_container sub-store
+    log_driver="$(docker inspect -f '{{.HostConfig.LogConfig.Type}}' sub-store 2>/dev/null || true)"
+    [ "$log_driver" = "json-file" ] || fail "cannot clear runtime logs: the container does not use the json-file logging driver"
+    log_path="$(docker inspect -f '{{.LogPath}}' sub-store 2>/dev/null || true)"
+    [ -n "$log_path" ] && [ -f "$log_path" ] || fail "cannot locate the Sub-Store Docker log file"
+    was_running="$(docker inspect -f '{{.State.Running}}' sub-store 2>/dev/null || true)"
+    case "$was_running" in
+        true) docker stop -t 10 sub-store >/dev/null || fail "could not stop Sub-Store before clearing its logs" ;;
+        false) ;;
+        *) fail "could not determine the Sub-Store container state" ;;
+    esac
+    if ! : > "$log_path"; then
+        [ "$was_running" != "true" ] || docker start sub-store >/dev/null 2>&1 || true
+        fail "could not clear the Sub-Store Docker log file"
+    fi
+    if [ "$was_running" = "true" ] && ! docker start sub-store >/dev/null; then
+        fail "runtime logs were cleared, but Sub-Store did not restart; start the service manually"
+    fi
+    echo "运行日志已清空。"
+}
+
 clear_local_logs() {
     [ -d /tmp/sub-store-operation/lock ] &&
-        [ "$(cat /tmp/sub-store-operation/action 2>/dev/null || true)" = "clear-logs" ] ||
-        fail "local logs can only be cleared through the queued maintenance action"
+        [ "$(cat /tmp/sub-store-operation/action 2>/dev/null || true)" = "clear-maintenance-logs" ] ||
+        fail "maintenance logs can only be cleared through the queued LuCI action"
     : > /tmp/sub-store-operation/output.log
-    echo "维护日志已清空；Docker 运行日志和安装失败记录均已保留。"
 }
 
 show_health() {
@@ -741,11 +766,11 @@ case "$ACTION" in
     logs)
         docker logs --tail 100 sub-store
         ;;
-    clear-logs)
-        clear_local_logs
+    clear-runtime-logs)
+        clear_runtime_logs
         ;;
-    check)
-        docker exec -i sub-store node --input-type=commonjs - < "$HEALTHCHECK"
+    clear-maintenance-logs)
+        clear_local_logs
         ;;
     render)
         render_config
@@ -839,6 +864,6 @@ case "$ACTION" in
         uninstall_plugin "${2:-}"
         ;;
     *)
-        fail "usage: sub-storectl {status|health|app-version|url|api-url|storage|logs|check|check-plugin-update|install-plugin-update|render|import-legacy|start|stop|restart|pull|update|update-all|rotate-key|remove-container|export-data|uninstall}"
+        fail "usage: sub-storectl {status|health|app-version|url|api-url|storage|logs|check-plugin-update|install-plugin-update|render|import-legacy|start|stop|restart|pull|update|update-all|rotate-key|remove-container|export-data|uninstall}"
         ;;
 esac

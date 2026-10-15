@@ -64,7 +64,6 @@ return view.extend({
             this.stopButton.disabled = disabled || status !== 'running';
         if (this.restartButton)
             this.restartButton.disabled = disabled || status !== 'running';
-        if (this.clearLogsButton) this.clearLogsButton.disabled = disabled || this.activeLog === 'container';
         if (this.map && this.map.root && this.map.root.querySelectorAll)
             this.map.root.querySelectorAll('input,select,textarea').forEach(input => { input.disabled = disabled; });
     },
@@ -155,6 +154,7 @@ return view.extend({
         this.address.value = s.url || '';
         this.open.href = s.url || '#';
         this.open.hidden = !s.url || s.container !== 'running';
+        this.copyAddressButton.disabled = !s.url;
         this.storage.textContent = s.storage || '实际路径暂不可用';
         const image = String(s.image || '').split(/\s+\/\s+/, 2);
         this.image.textContent = image[0] || '容器镜像未就绪';
@@ -212,35 +212,25 @@ return view.extend({
             }
         }, 1000);
     },
-    selectLog: function(name) {
-        this.activeLog = name;
-        this.followLog = true;
-        this.paintLog();
-        this.updateLogControls();
-    },
     updateLogControls: function() {
-        if (!this.clearLogsButton) return;
-        this.clearLogsButton.hidden = this.activeLog === 'container';
-        this.clearLogsButton.disabled = !!this.localBusy || !!(this.state && this.state.busy);
-        this.logHint.textContent = '最多保留 1 MiB，超出部分自动清理。';
+        if (!this.clearLogButtons) return;
+        const disabled = !!this.localBusy || !!(this.state && this.state.busy);
+        Object.values(this.clearLogButtons).forEach(button => { button.disabled = disabled; });
     },
     paintLog: function() {
-        if (!this.logBox || !this.state) return;
+        if (!this.logBoxes || !this.state) return;
         const logs = {
             operation: this.state.output,
             container: this.state.container_log
         };
-        const labels = { operation: '维护日志', container: '运行日志' };
-        const text = logs[this.activeLog] || '暂无日志';
-        const wasAtBottom = this.logBox.scrollHeight - this.logBox.scrollTop - this.logBox.clientHeight < 24;
-        if (this.logBox.textContent !== text) this.logBox.textContent = text;
-        if (this.followLog || wasAtBottom) this.logBox.scrollTop = this.logBox.scrollHeight;
-        this.followLog = false;
-        this.logTitle.textContent = labels[this.activeLog];
-        Object.keys(this.logTabs).forEach(name => {
-            const active = name === this.activeLog;
-            this.logTabs[name].className = 'cbi-button' + (active ? ' cbi-button-action' : '');
-            if (this.logTabs[name].setAttribute) this.logTabs[name].setAttribute('aria-pressed', active ? 'true' : 'false');
+        Object.keys(logs).forEach(name => {
+            const box = this.logBoxes[name];
+            if (!box) return;
+            const text = logs[name] || '暂无日志';
+            const wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
+            if (box.textContent !== text) box.textContent = text;
+            if (this.followLogs[name] || wasAtBottom) box.scrollTop = box.scrollHeight;
+            this.followLogs[name] = false;
         });
     },
     refreshLogs: async function() {
@@ -257,9 +247,7 @@ return view.extend({
         if (action === 'update-all') {
             this.updateAction = action;
             this.updateStartVersion = this.state && this.state.version;
-            this.selectLog('operation');
         }
-        if (action === 'check') this.selectLog('operation');
         this.enqueuePendingAction = action;
         this.enqueuePreviousOperation = (this.state && this.state.operation) || '';
         this.enqueueRequestError = null;
@@ -350,30 +338,33 @@ return view.extend({
         this.buttons = [];
         this.status = E('p');
         this.version = E('p');
-        this.address = E('input', { id: 'sub-store-management-address', 'class': 'cbi-input-text', readonly: true, style: 'width:100%',
+        this.address = E('input', { id: 'sub-store-management-address', 'class': 'cbi-input-text', readonly: true,
             'aria-label': '访问地址' });
-        this.open = E('a', { 'class': 'cbi-button cbi-button-positive sub-store-open-button', target: '_blank', rel: 'noopener noreferrer' }, ['点击打开 sub-store']);
-        const copy = E('button', { 'class': 'cbi-button', click: ui.createHandlerFn(this, async function() {
+        this.open = E('a', { 'class': 'cbi-button cbi-button-positive sub-store-open-button', target: '_blank', rel: 'noopener noreferrer' }, ['打开 sub-store']);
+        this.copyAddressButton = E('button', { 'class': 'cbi-button', 'aria-label': '复制访问地址', click: ui.createHandlerFn(this, async function() {
             if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(this.address.value);
             else {
                 this.address.focus(); this.address.select();
                 if (!document.execCommand('copy')) throw new Error('自动复制不可用，请复制已选中的链接。');
             }
             ui.addNotification(null, E('p', {}, ['管理链接已复制。']), 'info');
-        }) }, ['复制访问地址']);
+        }) }, ['复制']);
         this.startButton = this.button('启动服务', 'start');
         this.stopButton = this.button('停止服务', 'stop', 'negative');
         this.restartButton = this.button('重启服务', 'restart');
         const statusSection = E('div', { 'class': 'cbi-section sub-store-overview' }, [
             E('h3', {}, ['服务概览']), this.status, this.version,
-            E('div', { 'class': 'sub-store-primary-actions' }, [this.open, copy]),
+            E('div', { 'class': 'sub-store-primary-actions' }, [this.open]),
             E('div', { 'class': 'sub-store-service-actions' }, [
                 E('span', { 'class': 'sub-store-action-label' }, ['服务控制']),
                 this.startButton, this.stopButton, this.restartButton
             ]),
-            E('label', { 'class': 'sub-store-address-label', for: 'sub-store-management-address' }, ['访问地址']), this.address
+            E('div', { 'class': 'sub-store-address-field' }, [
+                E('label', { 'class': 'sub-store-address-label', for: 'sub-store-management-address' }, ['访问地址']),
+                E('div', { 'class': 'sub-store-address-control' }, [this.address, this.copyAddressButton])
+            ])
         ]);
-        const m = this.map = new form.Map('sub-store', null, '管理官方 Sub-Store Docker；订阅与配置请在管理页面操作。');
+        const m = this.map = new form.Map('sub-store', null, 'Docker 服务管理；订阅与配置在 Sub-Store 操作。');
         const s = m.section(form.NamedSection, 'main', 'settings');
         s.tab('basic', '基本设置');
         s.tab('advanced', '高级设置');
@@ -423,37 +414,37 @@ return view.extend({
         this.created = E('span');
         this.updateStatus = E('span', { 'aria-live': 'polite' }, ['尚未检查更新']);
         this.updateButton = this.button('检查更新', 'update-all', 'positive');
-        this.activeLog = 'container';
-        this.followLog = true;
-        this.logTabs = {};
-        this.logTitle = E('span', { 'aria-live': 'polite' }, ['运行日志']);
-        this.logHint = E('span');
-        this.logBox = E('pre', { 'class': 'sub-store-log-output', role: 'log', 'aria-label': '日志内容' });
-        const logTab = (name, label) => {
-            const tab = E('button', { 'class': 'cbi-button', 'aria-pressed': 'false',
-                click: ui.createHandlerFn(this, function() { this.selectLog(name); }) }, [label]);
-            this.logTabs[name] = tab;
-            return tab;
-        };
-        const checkService = this.button('检查服务', 'check', 'action');
-        this.clearLogsButton = E('button', { 'class': 'cbi-button cbi-button-negative',
-            click: ui.createHandlerFn(this, function() {
-                return this.confirm('clear-logs', '清空维护日志',
-                    '这会清除启动、重启、更新和检查服务产生的维护记录。Sub-Store 的订阅、配置、数据卷和 Docker 运行日志不会被删除。');
-            }) }, ['清空维护日志']);
-        this.buttons.push(this.clearLogsButton);
-        const logPanel = this.logPanel = E('div', { 'class': 'sub-store-log-panel' }, [
-            E('div', { 'class': 'sub-store-log-toolbar' }, [
-                E('div', { 'class': 'sub-store-log-tabs', role: 'group', 'aria-label': '日志类型' }, [
-                    logTab('container', '运行日志'), logTab('operation', '维护日志')
+        this.followLogs = { container: true, operation: true };
+        this.logBoxes = {};
+        this.clearLogButtons = {};
+        const logSection = (name, title, action) => {
+            const runtime = name === 'container';
+            const box = E('pre', { 'class': 'sub-store-log-output', role: 'log', 'aria-label': title });
+            const clearButton = E('button', { 'class': 'cbi-button cbi-button-negative',
+                click: ui.createHandlerFn(this, function() {
+                    const running = this.state && this.state.container === 'running';
+                    const message = runtime ?
+                        (running ? '清空运行日志需要短暂重启服务；数据卷保留。' : '清空运行日志，不会启动已停止的服务；数据卷保留。') :
+                        '只清空维护日志，不影响运行日志和数据卷。';
+                    return this.confirm(action, '清空日志', message);
+                }) }, ['清空日志']);
+            this.logBoxes[name] = box;
+            this.clearLogButtons[name] = clearButton;
+            this.buttons.push(clearButton);
+            return E('div', { 'class': 'sub-store-log-panel' }, [
+                E('div', { 'class': 'sub-store-log-toolbar' }, [
+                    E('strong', { 'aria-live': 'polite' }, [title]),
+                    E('div', { 'class': 'sub-store-log-actions' }, [clearButton])
                 ]),
-                E('div', { 'class': 'sub-store-log-actions' }, [checkService, this.clearLogsButton])
-            ]),
-            E('div', { 'class': 'sub-store-log-heading' }, [
-                E('strong', {}, [this.logTitle]),
-                E('span', { 'class': 'cbi-value-description' }, [this.logHint])
-            ]),
-            this.logBox
+                E('div', { 'class': 'sub-store-log-heading' }, [
+                    E('span', { 'class': 'cbi-value-description' }, ['最多保留 1 MiB，超出部分自动清理。'])
+                ]),
+                box
+            ]);
+        };
+        const logPanel = this.logPanel = E('div', { 'class': 'sub-store-log-list' }, [
+            logSection('container', '运行日志', 'clear-runtime-logs'),
+            logSection('operation', '维护日志', 'clear-maintenance-logs')
         ]);
         const display = (tab, id, label, node) => {
             const option = s.taboption(tab, form.DummyValue, id, label);
@@ -497,6 +488,8 @@ return view.extend({
             '.sub-store-page .sub-store-status.is-warning{color:#765411;background:#fff5dc;border-color:#ead38e}',
             '.sub-store-page .sub-store-open-button{text-transform:none}',
             '.sub-store-page .sub-store-primary-actions,.sub-store-page .sub-store-service-actions{display:flex;align-items:center;gap:.5em;flex-wrap:wrap;margin:.75em 0}',
+            '.sub-store-page .sub-store-address-control{display:flex;align-items:stretch;gap:.4em;max-width:48em}',
+            '.sub-store-page .sub-store-address-control .cbi-input-text{box-sizing:border-box;flex:1;min-width:0;width:auto!important}',
             '.sub-store-page .sub-store-service-actions{padding-top:.7em;border-top:1px solid var(--border-color,#ddd)}',
             '.sub-store-page .sub-store-action-label,.sub-store-page .sub-store-address-label{font-weight:600}',
             '.sub-store-page .sub-store-address-label{display:block;margin:.9em 0 .35em}',
@@ -505,15 +498,15 @@ return view.extend({
             '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-title{display:none!important}',
             '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{display:block!important;width:100%!important;max-width:none!important;margin:0!important}',
             '.sub-store-page .sub-store-image-digest{color:#7b8190;font-family:monospace}',
+            '.sub-store-page .sub-store-log-list{display:grid;gap:1em}',
             '.sub-store-page .sub-store-log-panel{box-sizing:border-box;width:100%;max-width:1280px;margin:0 auto;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:8px;background:var(--background-color-high,#fff)}',
             '.sub-store-page .sub-store-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75em;flex-wrap:wrap}',
-            '.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}',
-            '.sub-store-page .sub-store-log-tabs{padding:.25em;border-radius:6px;background:var(--background-color-low,#f5f5f5)}',
+            '.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}',
             '.sub-store-page .sub-store-log-heading{display:flex;align-items:baseline;gap:.65em;flex-wrap:wrap;margin:.85em 0 .4em}',
             '.sub-store-page .sub-store-log-heading .cbi-value-description{margin:0}',
             '.sub-store-page .sub-store-log-output{box-sizing:border-box;width:100%;height:24em;max-height:55vh;overflow:auto;overscroll-behavior:contain;white-space:pre;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:6px;background:var(--background-color-low,#f7f7f7);font-family:monospace;font-size:.9em;line-height:1.5}',
             '@media(prefers-color-scheme:dark){.sub-store-page .sub-store-status.is-running{color:#b5dfbd;background:#23422b;border-color:#386b44}.sub-store-page .sub-store-status.is-warning{color:#eed694;background:#463a21;border-color:#76602e}}',
-            '@media(max-width:700px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-tabs,.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-tabs .cbi-button{flex:1}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
+            '@media(max-width:700px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
         ].join('');
         return E('div', { 'class': 'sub-store-page' }, [
             E('style', {}, [pageStyles]),

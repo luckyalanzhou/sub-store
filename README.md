@@ -15,13 +15,15 @@ This repository builds an iStoreOS manual-install `.run` package in the Makeself
 
 The `.run` is a self-extracting installer that can be selected through **iStore → 手动安装**. The package includes the app and LuCI integration, but it is not a fully offline bundle: Docker packages and the sub-store image are fetched from configured opkg feeds and Docker Hub during installation, so the device needs Internet access. Docker publishes both selected host ports on router interfaces; the installer does not add an OpenWrt WAN redirect or firewall rule. The official frontend includes an API proxy, so remote DDNS management needs only the frontend port forward. Forward the backend port only if you also need direct API access. The package does not install Cloudflare components.
 
+Releases also include native packages: `.ipk` for OpenWrt/iStoreOS 24.10 and `.apk` for OpenWrt 25.12. Upload the matching package in **iStore → 手动安装**, or install it with `opkg install` on 24.10 and `apk add --allow-untrusted` on 25.12. These architecture-independent LuCI packages declare their dependencies for the system package manager to resolve from configured feeds. They install the LuCI service manager and configuration; start Sub-Store from LuCI to pull the official image. The APK uses OpenWrt's Alpine package format, not Android APK.
+
 ## Compatibility
 
-The installer targets iStoreOS/OpenWrt 24.10.x with `opkg` and LuCI. It installs `dockerd` and `docker` from the device's configured feeds if Docker is missing, then enables and starts the daemon. The package itself contains architecture-independent shell and Lua files; Docker fetches an image for the device architecture.
+The `.run` installer targets iStoreOS/OpenWrt 24.10.x with `opkg` and LuCI. It installs `dockerd` and `docker` from the device's configured feeds if Docker is missing, then enables and starts the daemon. Native `.ipk` and `.apk` packages are architecture-independent LuCI files; Docker fetches an image for the device architecture.
 
 ## Build and download
 
-正式发布只能从 **Actions → Build sub-store installer → Run workflow** 手动启动，且只能选择 `main`。启动时选择 `patch`（默认，兼容性修复）、`minor`（向后兼容的新功能）或 `major`（不兼容的变更）；普通代码推送不会构建或发布正式安装包，每周计划任务只检查官方 Docker 镜像。
+正式发布只能从 **Actions → Build sub-store installer → Run workflow** 手动启动，且只能选择 `main`。启动时选择 `patch`（默认，兼容性修复）、`minor`（向后兼容的新功能）或 `major`（不兼容的变更）；普通代码推送不会构建或发布正式安装包，每周计划任务只检查官方 Docker 镜像。每个 Release 提供 `.run`、24.10 `.ipk` 和 25.12 `.apk`，每个文件都附 SHA-256 校验文件。
 
 版本采用 `MAJOR.MINOR.PATCH`，从 `0.0.0` 开始，数字不补前导零且不设项目级上限。Patch 递增仅增加末段（`1.9.99 → 1.9.100`）；Minor 递增次版本并将 Patch 归零；Major 递增主版本并将 Minor、Patch 归零。Git Tag 使用 `v` 前缀，例如 `v1.4.12`；安装包为 `sub-store-1.4.12.run`，安装器记录 `1.4.12`。
 
@@ -29,19 +31,27 @@ The installer targets iStoreOS/OpenWrt 24.10.x with `opkg` and LuCI. It installs
 
 发布前会检查 POSIX shell、OpenWrt BusyBox `ash`、LuCI、前端、Docker 容器及安装包。实际 iStoreOS 安装流程仍需在设备上验证。
 
-To install, download the versioned `.run` asset from a Release, then use **iStore → 手动安装**. For a terminal install, upload the file to the router and set `RUN_FILE` to the exact filename shown in the Release:
+To use the full iStoreOS installer, download the versioned `.run` asset from a Release and use **iStore → 手动安装**. The native packages can be installed from the same page; for terminal installs use the package manager for the matching system:
 
 ```sh
-RUN_FILE="sub-store-<version>.run"
-chmod +x "$RUN_FILE"
-"./$RUN_FILE"
+VERSION=0.0.1
+opkg install "/tmp/sub-store-$VERSION-openwrt-24.10.ipk"
 ```
+
+For OpenWrt 25.12, use `apk add --allow-untrusted` with its matching package:
+
+```sh
+VERSION=0.0.1
+apk add --allow-untrusted "/tmp/sub-store-$VERSION-openwrt-25.12.apk"
+```
+
+Use only the command matching the router's OpenWrt series. The LuCI update action also uses the installed package manager for `.ipk`/`.apk` installations; `.run` installations continue to update the LuCI files through the plugin-only installer path.
 
 ## LuCI and installation feedback
 
-The installer reports six stages and points to `/tmp/sub-store-run-install.log` on failure. The iStoreOS-themed LuCI page keeps status and the Web entry visible above basic/advanced settings, logs and maintenance tabs. One scrollable panel switches between the official container runtime log and local maintenance output. Logs are requested only while that panel is visible and retain at most 1 MiB each; excess output is removed automatically. Lightweight service state continues to refresh every five seconds. Clearing maintenance output does not remove Docker logs, installer diagnostics or Sub-Store data. **Save & Apply** commits this app's settings and queues the container restart. **Save** stores settings without restarting. Maintenance tasks reserve a lock before returning to LuCI, so long image downloads do not hold the RPC request open.
+The installer reports six stages and points to `/tmp/sub-store-run-install.log` on failure. The iStoreOS-themed LuCI page keeps status and the Web entry visible above basic/advanced settings, logs and maintenance tabs. The runtime log and local maintenance output appear in separate scrollable panels, each with its own **清空日志** button. Clearing runtime logs briefly restarts a running container; clearing maintenance logs only truncates operation output. Both preserve the Docker data volume. Logs are requested only while the log panels are visible and retain at most 1 MiB each; excess output is removed automatically. Lightweight service state continues to refresh every five seconds. **Save & Apply** commits this app's settings and queues the container restart. **Save** stores settings without restarting. Maintenance tasks reserve a lock before returning to LuCI, so long image downloads do not hold the RPC request open.
 
-Use **检查更新** in LuCI to check both the GitHub Release and the official Docker image. The image is pulled and compared; an unchanged image does not recreate the container. A newer plugin is downloaded, verified against SHA-256, and installed without changing Docker. Each update is attempted even if the other fails, and results appear in the maintenance log. Image replacement preserves the Docker data volume. LuCI reloads after confirming that the plugin version changed successfully. Manual `.run` installation remains available.
+Use **检查更新** in LuCI to check both the GitHub Release and the official Docker image. The image is pulled and compared; an unchanged image does not recreate the container. A newer plugin is downloaded, verified against SHA-256, and installed using the detected package format without changing Docker. Each update is attempted even if the other fails, and results appear in the maintenance log. Image replacement preserves the Docker data volume. LuCI reloads after confirming that the plugin version changed successfully.
 
 ## First launch
 
@@ -80,7 +90,6 @@ The managed instance uses separate frontend (`3001`) and backend (`3000`) contai
 /usr/bin/sub-storectl health
 /usr/bin/sub-storectl app-version
 /usr/bin/sub-storectl logs
-/usr/bin/sub-storectl check
 /usr/bin/sub-storectl update
 /usr/bin/sub-storectl update-all
 /usr/bin/sub-storectl rotate-key
@@ -95,9 +104,9 @@ The managed instance uses separate frontend (`3001`) and backend (`3000`) contai
 
 ## Validation status
 
-GitHub Actions validates the shell scripts and verifies that the generated `.run` can extract its payload. The actual iStoreOS manual-install flow, package feed availability, LuCI rendering, and Docker image pull must be verified on an iStoreOS 24.10.x device before describing this artifact as device-tested.
+GitHub Actions validates shell/LuCI behavior, builds `.ipk` and `.apk` with the official OpenWrt SDKs, and verifies package checksums and `.run` extraction. Actual package-manager installation, feed dependency availability, LuCI rendering, and Docker image pulls still need device verification.
 
-Container startup checks the frontend HTML, JavaScript entrypoints and referenced modules, CSS assets, the frontend API proxy, and the raw backend API. It rejects missing assets and HTML fallback responses at JavaScript URLs. Use `sub-storectl check` for the same diagnostic report. These HTTP checks cannot detect every browser runtime or browser-cache error; a white screen with successful resource checks still needs the browser console to identify its cause.
+Container startup and replacement check the frontend HTML, JavaScript entrypoints and referenced modules, CSS assets, the frontend API proxy, and the raw backend API. They reject missing assets and HTML fallback responses at JavaScript URLs. These automatic checks cannot detect every browser runtime or browser-cache error; a white screen with successful resource checks still needs the browser console to identify its cause.
 
 ## References
 

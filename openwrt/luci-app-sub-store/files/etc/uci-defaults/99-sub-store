@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+if ! uci -q get sub-store.main >/dev/null 2>&1; then
+	uci set sub-store.main=settings
+fi
+if ! uci -q get sub-store.main.api_path >/dev/null 2>&1; then
+	api_path="$(dd if=/dev/urandom bs=2048 count=1 2>/dev/null | LC_ALL=C tr -dc '0123456789abcdef' | cut -c1-48)"
+	[ "${#api_path}" -eq 48 ] || { echo 'Could not generate the Sub-Store API path.' >&2; exit 1; }
+	uci set "sub-store.main.api_path=$api_path"
+fi
+uci commit sub-store
+chmod 600 /etc/config/sub-store
+mkdir -p /etc/sub-store
+rm -f /usr/lib/lua/luci/controller/sub_store.lua \
+	/usr/lib/lua/luci/model/cbi/sub_store.lua \
+	/usr/lib/sub-store/check-update
+rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
+rm -rf /tmp/luci-modulecache
+[ ! -x /etc/init.d/sub-store ] || /etc/init.d/sub-store enable
+[ ! -x /etc/init.d/rpcd ] || /etc/init.d/rpcd reload

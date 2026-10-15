@@ -23,9 +23,12 @@ MOCK_MERGE=""
 MOCK_FRONTEND_MAPPING=""
 MOCK_BACKEND_MAPPING=""
 MOCK_CONTAINER_DATA_PATH=""
+MOCK_CONTAINER_RUNNING=true
 DOCKER_ARGS="$TEST_DIR/docker-args"
 DOCKER_LOG="$TEST_DIR/docker-log"
 MOCK_APP_LOGS="$TEST_DIR/app.log"
+MOCK_LOG_DRIVER=json-file
+MOCK_LOG_PATH="$TEST_DIR/sub-store-runtime.log"
 
 uci() {
     case "$*" in
@@ -52,7 +55,11 @@ docker() {
         inspect)
             if [ "${2:-}" = '-f' ]; then
                 case "$3" in
-                    *State.Status*) printf '%s\n' running ;;
+                    *State.Status*) [ "$MOCK_CONTAINER_RUNNING" = true ] && printf '%s\n' running || printf '%s\n' exited ;;
+                    *State.Running*) printf '%s\n' "$MOCK_CONTAINER_RUNNING" ;;
+                    *Config.Image*) printf '%s\n' xream/sub-store:latest ;;
+                    *HostConfig.LogConfig.Type*) printf '%s\n' "$MOCK_LOG_DRIVER" ;;
+                    *LogPath*) printf '%s\n' "$MOCK_LOG_PATH" ;;
                     *Config.Env*) if [ -n "$MOCK_MERGE" ]; then printf 'SUB_STORE_BACKEND_MERGE=%s\n' "$MOCK_MERGE"; fi ;;
                     *Mounts*) printf '%s\n' "$MOCK_CONTAINER_DATA_PATH" ;;
                     *) return 1 ;;
@@ -72,7 +79,9 @@ docker() {
         run) printf '%s\n' "$@" > "$DOCKER_ARGS"; printf '%s\n' mock-container ;;
         exec) return 0 ;;
         logs) cat "$MOCK_APP_LOGS" ;;
-        rm|rename|start) return 0 ;;
+        stop) MOCK_CONTAINER_RUNNING=false; return 0 ;;
+        start) MOCK_CONTAINER_RUNNING=true; return 0 ;;
+        rm|rename) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -128,14 +137,39 @@ grep -Fxq '30s' "$DOCKER_ARGS"
 grep -Fq 'http://sub.example.test:8081' "$DOCKER_ARGS"
 
 mkdir -p "$TEST_DIR/operation/lock"
-printf '%s\n' clear-logs > "$TEST_DIR/operation/action"
-printf '%s\n' 'old operation output' > "$TEST_DIR/operation/output.log"
-printf '%s\n' 'old install output' > "$TEST_DIR/install.log"
-sed -i "s|/tmp/sub-store-operation|$TEST_DIR/operation|g; s|/tmp/sub-store-run-install.log|$TEST_DIR/install.log|g" "$TEST_DIR/functions.sh"
+printf '%s\n' clear-runtime-logs > "$TEST_DIR/operation/action"
+sed -i "s|/tmp/sub-store-operation|$TEST_DIR/operation|g" "$TEST_DIR/functions.sh"
 . "$TEST_DIR/functions.sh"
-clear_local_logs >/dev/null
+MOCK_CONTAINER=1
+printf '%s\n' 'Sub-Store runtime output' > "$MOCK_LOG_PATH"
+clear_runtime_logs >/dev/null
+[ ! -s "$MOCK_LOG_PATH" ]
+[ "$MOCK_CONTAINER_RUNNING" = true ]
+[ -d "$VOLUME_PATH" ]
+grep -Fq 'stop -t 10 sub-store' "$DOCKER_LOG"
+grep -Fq 'start sub-store' "$DOCKER_LOG"
+MOCK_CONTAINER_RUNNING=false
+printf '%s\n' 'stopped runtime output' > "$MOCK_LOG_PATH"
+start_count="$(grep -c '^start sub-store$' "$DOCKER_LOG")"
+clear_runtime_logs >/dev/null
+[ ! -s "$MOCK_LOG_PATH" ]
+[ "$MOCK_CONTAINER_RUNNING" = false ]
+[ "$(grep -c '^start sub-store$' "$DOCKER_LOG")" = "$start_count" ]
+MOCK_LOG_DRIVER=local
+printf '%s\n' 'must be preserved' > "$MOCK_LOG_PATH"
+if (clear_runtime_logs) >/dev/null 2>&1; then
+    echo 'Runtime logs were cleared with an unsupported logging driver.' >&2
+    exit 1
+fi
+grep -Fxq 'must be preserved' "$MOCK_LOG_PATH"
+MOCK_LOG_DRIVER=json-file
+printf '%s\n' clear-maintenance-logs > "$TEST_DIR/operation/action"
+printf '%s\n' 'old maintenance output' > "$TEST_DIR/operation/output.log"
+printf '%s\n' 'runtime output remains' > "$MOCK_LOG_PATH"
+clear_local_logs
 [ ! -s "$TEST_DIR/operation/output.log" ]
-grep -Fxq 'old install output' "$TEST_DIR/install.log"
+grep -Fxq 'runtime output remains' "$MOCK_LOG_PATH"
+[ -d "$VOLUME_PATH" ]
 
 mkdir "$TEST_DIR/legacy-data"
 printf '%s\n' '{"test":"preserved"}' > "$TEST_DIR/legacy-data/storage.json"
