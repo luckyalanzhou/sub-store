@@ -20,9 +20,11 @@
 
 | 系统 | 安装包 | 安装方式 |
 | --- | --- | --- |
-| iStoreOS / OpenWrt 24.10 | `.run` | iStore → 手动安装；完整部署安装器 |
-| iStoreOS / OpenWrt 24.10 | `.ipk` | iStore → 手动安装，或 `opkg install` |
-| OpenWrt 25.12 | `.apk` | iStore → 手动安装，或 `apk add --allow-untrusted` |
+| iStoreOS 24.10 | `.run` | iStore → 手动安装；自解压部署安装器 |
+| iStoreOS / OpenWrt 24.10 | `.ipk` | 系统 → 软件包 → 上传安装，或 `opkg install` |
+| iStoreOS / OpenWrt 25.12 | `.apk` | iStore → 手动安装，或 `apk add --allow-untrusted` |
+
+iStore「手动安装」也接受三种格式：`.run` 会执行安装器，`.ipk` 和 `.apk` 会交给设备对应的包管理器。iStoreOS / OpenWrt 25.12 的系统软件页面可能拒绝未签名的本地 `.apk`；此时请用 iStore 手动安装或命令行安装。
 
 终端安装原生包示例，将版本号改为所下载附件的版本，并只执行与设备系统匹配的一组命令：
 
@@ -58,8 +60,8 @@ sub-storectl logs
 
 - 版本使用 `MAJOR.MINOR.PATCH`。在 **Actions → Build sub-store installer → Run workflow** 手动启动发布，选择 `main` 和 `patch`、`minor` 或 `major`。
 - 普通代码推送不会发布安装包；项目不构建自有 Docker 镜像，使用官方 `xream/sub-store` 镜像。
-- 正式发布工作流为 iStoreOS/OpenWrt 24.10 构建 `.run`、`.ipk`，为 OpenWrt 25.12 构建 `.apk`，并生成 SHA-256 校验文件。
-- `.run` 面向使用 `opkg` 的 24.10 系统；`.apk` 面向使用 `apk` 的 OpenWrt 25.12。
+- 正式发布工作流为 iStoreOS 24.10 构建 `.run`，为 iStoreOS/OpenWrt 24.10 构建 `.ipk`，为 iStoreOS/OpenWrt 25.12 构建 `.apk`，并生成 SHA-256 校验文件。
+- `.run` 面向 iStoreOS 24.10；`.ipk` 面向使用 `opkg` 的 24.10 系统；`.apk` 面向使用 `apk` 的 25.12 系统。
 
 ## 开源协议
 

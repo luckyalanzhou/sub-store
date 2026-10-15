@@ -114,7 +114,7 @@ jobs:
           mkdir -p dist
           {
             printf '# sub-store v%s\n\n' "$VERSION"
-            printf '安装包：iStoreOS `.run`、OpenWrt 24.10 `.ipk`、OpenWrt 25.12 `.apk`；各包均附 SHA-256 校验文件。首次启动需要联网拉取官方镜像。\n\n'
+            printf '安装包：iStoreOS 24.10 `.run`；iStoreOS/OpenWrt 24.10 `.ipk`；iStoreOS/OpenWrt 25.12 `.apk`；各包均附 SHA-256 校验文件。首次启动需要联网拉取官方镜像。\n\n'
             printf '## 优化内容\n\n'
             index=0
             if [[ -n "$PREVIOUS_TAG" ]]; then
