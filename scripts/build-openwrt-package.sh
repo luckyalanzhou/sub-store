@@ -70,18 +70,34 @@ cp -R "$ROOT/openwrt/luci-app-sub-store/." "$PACKAGE_DIR/"
 make -C "$SDK_DIR" defconfig
 
 # A direct package/compile target can succeed without producing an artifact when
-# the package is not selected in Kconfig. Build it as a module, like selecting
-# <M> in menuconfig, and verify that the SDK retained the selection.
-PACKAGE_CONFIG='CONFIG_PACKAGE_luci-app-sub-store=m'
-if grep -q '^CONFIG_PACKAGE_luci-app-sub-store=' "$SDK_DIR/.config"; then
-	sed -i 's/^CONFIG_PACKAGE_luci-app-sub-store=.*/CONFIG_PACKAGE_luci-app-sub-store=m/' "$SDK_DIR/.config"
-elif grep -q '^# CONFIG_PACKAGE_luci-app-sub-store is not set$' "$SDK_DIR/.config"; then
-	sed -i 's/^# CONFIG_PACKAGE_luci-app-sub-store is not set$/CONFIG_PACKAGE_luci-app-sub-store=m/' "$SDK_DIR/.config"
-else
-	printf '\n%s\n' "$PACKAGE_CONFIG" >> "$SDK_DIR/.config"
-fi
+# the package is not selected in Kconfig. Select it and its runtime dependencies
+# as modules, like selecting <M> in menuconfig, then verify the SDK kept it.
+set_package_module() {
+	package="$1"
+	symbol="CONFIG_PACKAGE_$package"
+	if grep -q "^$symbol=" "$SDK_DIR/.config"; then
+		sed -i "s|^$symbol=.*|$symbol=m|" "$SDK_DIR/.config"
+	elif grep -q "^# $symbol is not set$" "$SDK_DIR/.config"; then
+		sed -i "s|^# $symbol is not set$|$symbol=m|" "$SDK_DIR/.config"
+	else
+		printf '\n%s=m\n' "$symbol" >> "$SDK_DIR/.config"
+	fi
+}
+for package in \
+	luci-app-sub-store \
+	luci-base \
+	luci-lib-base \
+	luci-lib-jsonc \
+	lua \
+	rpcd-mod-file \
+	curl \
+	jsonfilter \
+	docker \
+	dockerd; do
+	set_package_module "$package"
+done
 make -C "$SDK_DIR" defconfig
-grep -Fxq "$PACKAGE_CONFIG" "$SDK_DIR/.config" || {
+grep -Fxq 'CONFIG_PACKAGE_luci-app-sub-store=m' "$SDK_DIR/.config" || {
 	echo "OpenWrt SDK did not keep luci-app-sub-store selected; check package feeds and dependencies." >&2
 	exit 1
 }
