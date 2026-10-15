@@ -70,21 +70,22 @@ cp -R "$ROOT/openwrt/luci-app-sub-store/." "$PACKAGE_DIR/"
 make -C "$SDK_DIR" defconfig
 
 # A direct package/compile target can succeed without producing an artifact when
-# the package is not selected in Kconfig. Select it and its runtime dependencies
-# as modules, like selecting <M> in menuconfig, then verify the SDK kept it.
-set_package_module() {
+# the package is not selected in Kconfig. Dependencies may be bool or tristate
+# options, so enable them with y and build the plugin itself as a module (<M>).
+set_package_config() {
 	package="$1"
+	value="$2"
 	symbol="CONFIG_PACKAGE_$package"
 	if grep -q "^$symbol=" "$SDK_DIR/.config"; then
-		sed -i "s|^$symbol=.*|$symbol=m|" "$SDK_DIR/.config"
+		sed -i "s|^$symbol=.*|$symbol=$value|" "$SDK_DIR/.config"
 	elif grep -q "^# $symbol is not set$" "$SDK_DIR/.config"; then
-		sed -i "s|^# $symbol is not set$|$symbol=m|" "$SDK_DIR/.config"
+		sed -i "s|^# $symbol is not set$|$symbol=$value|" "$SDK_DIR/.config"
 	else
-		printf '\n%s=m\n' "$symbol" >> "$SDK_DIR/.config"
+		printf '\n%s=%s\n' "$symbol" "$value" >> "$SDK_DIR/.config"
 	fi
 }
+set_package_config luci-app-sub-store m
 for package in \
-	luci-app-sub-store \
 	luci-base \
 	luci-lib-base \
 	luci-lib-jsonc \
@@ -94,7 +95,7 @@ for package in \
 	jsonfilter \
 	docker \
 	dockerd; do
-	set_package_module "$package"
+	set_package_config "$package" y
 done
 make -C "$SDK_DIR" defconfig
 grep -Fxq 'CONFIG_PACKAGE_luci-app-sub-store=m' "$SDK_DIR/.config" || {
