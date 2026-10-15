@@ -56,7 +56,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.copyAddressButton.children[0], '复制');
     assert.equal(t.view.copyAddressButton['aria-label'], '复制访问地址');
     assert.equal(t.view.copyAddressButton.disabled, false);
-    const addressControl = page.children[2].children[5].children[1];
+    const addressControl = page.children[2].children[2].children[1];
     assert.deepEqual(addressControl.children, [t.view.address, t.view.copyAddressButton]);
     assert.equal(t.view.status.textContent, 'sub-store 服务已启动');
     assert.equal(t.view.status.className, 'sub-store-status is-running');
@@ -66,7 +66,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.appVersion.textContent, '2.42.3');
     assert.equal(t.view.image.textContent, '容器镜像未就绪');
     assert.equal(t.view.imageDigest.hidden, true);
-    assert.equal(page.children[2].children[0].children[0], '服务概览');
+    assert.equal(page.children[2].children[0].children[0].children[0].children[0], '服务概览');
     assert.match(source, /sub-store-status\{display:inline-flex/);
     assert.match(source, /sub-store-status\{[^}]*border-radius:4px/);
     assert.match(source, /sub-store-open-button\{text-transform:none\}/);
@@ -78,7 +78,11 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.doesNotMatch(source, /完整地址含 API 参数/);
     assert.doesNotMatch(source, /sub-store-maintenance-(?:panel|card|row)/);
     assert.doesNotMatch(source, /#cbi-sub-store-main-_maintenance/);
-    assert.match(source, /#cbi-sub-store-main-_image,.sub-store-page #cbi-sub-store-main-_app_version,.sub-store-page #cbi-sub-store-main-_created\{align-items:center\}/);
+    assert.match(source, /max-width:1480px/);
+    assert.match(source, /@media\(min-width:900px\).*grid-template-columns:minmax\(12rem,18rem\) minmax\(0,1fr\)/);
+    assert.match(source, /background:var\(--background-color-high,transparent\)/);
+    assert.match(source, /@media\(max-width:899px\)/);
+    assert.doesNotMatch(source, /prefers-color-scheme:dark/);
     assert.match(source, /#cbi-sub-store-main-_logs/);
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBoxes.container.textContent, 'runtime log');

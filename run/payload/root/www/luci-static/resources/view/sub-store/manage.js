@@ -353,8 +353,10 @@ return view.extend({
         this.stopButton = this.button('停止服务', 'stop', 'negative');
         this.restartButton = this.button('重启服务', 'restart');
         const statusSection = E('div', { 'class': 'cbi-section sub-store-overview' }, [
-            E('h3', {}, ['服务概览']), this.status, this.version,
-            E('div', { 'class': 'sub-store-primary-actions' }, [this.open]),
+            E('div', { 'class': 'sub-store-overview-head' }, [
+                E('div', { 'class': 'sub-store-overview-info' }, [E('h3', {}, ['服务概览']), this.status, this.version]),
+                E('div', { 'class': 'sub-store-primary-actions' }, [this.open])
+            ]),
             E('div', { 'class': 'sub-store-service-actions' }, [
                 E('span', { 'class': 'sub-store-action-label' }, ['服务控制']),
                 this.startButton, this.stopButton, this.restartButton
@@ -478,16 +480,23 @@ return view.extend({
             await this.refreshLogs();
         }, 5);
         const pageStyles = [
-            '.sub-store-page .sub-store-overview{border-radius:12px;padding:1.25em;margin-bottom:1.2em}',
+            '.sub-store-page{box-sizing:border-box;width:100%;max-width:1480px;margin:0 auto;padding:0 clamp(.75rem,1.6vw,1.5rem)}',
+            '.sub-store-page *{box-sizing:border-box}',
+            '.sub-store-page .sub-store-overview{border-radius:12px;padding:1.25em;margin-bottom:1.2em;background:var(--background-color-high,transparent)}',
+            '.sub-store-page .sub-store-overview-head{display:flex;align-items:center;justify-content:space-between;gap:1.5rem}',
+            '.sub-store-page .sub-store-overview-info{display:flex;align-items:baseline;flex-wrap:wrap;gap:.4rem 1.2rem;min-width:0}',
+            '.sub-store-page .sub-store-overview-info h3{margin:0}',
+            '.sub-store-page .sub-store-overview-info p{margin:.15em 0}',
             '.sub-store-page .cbi-button{margin-bottom:.25em}',
             '.sub-store-page pre{font-size:inherit}',
             '.sub-store-page input[readonly]{box-sizing:border-box}',
-            '.sub-store-page .sub-store-status{display:inline-flex;align-items:center;gap:.45em;max-width:100%;box-sizing:border-box;margin:.25em 0 .75em;padding:.38em .7em;border:1px solid;border-radius:4px;font-weight:600;line-height:1.4}',
-            '.sub-store-page .sub-store-status.is-running{color:#256b36;background:#eaf5ec;border-color:#bfdfc5}',
-            '.sub-store-page .sub-store-status.is-running:before{content:"";width:.5em;height:.5em;flex:none;border-radius:50%;background:#32934b}',
-            '.sub-store-page .sub-store-status.is-warning{color:#765411;background:#fff5dc;border-color:#ead38e}',
+            '.sub-store-page .sub-store-status{display:inline-flex;align-items:center;gap:.45em;max-width:100%;margin:.25em 0;padding:.32em .65em;border:1px solid var(--border-color,#ddd);border-radius:4px;background:var(--background-color-low,transparent);font-weight:600;line-height:1.4}',
+            '.sub-store-page .sub-store-status:before{content:"";width:.5em;height:.5em;flex:none;border-radius:50%}',
+            '.sub-store-page .sub-store-status.is-running:before{background:#32934b}',
+            '.sub-store-page .sub-store-status.is-warning:before{background:#c58a18}',
             '.sub-store-page .sub-store-open-button{text-transform:none}',
             '.sub-store-page .sub-store-primary-actions,.sub-store-page .sub-store-service-actions{display:flex;align-items:center;gap:.5em;flex-wrap:wrap;margin:.75em 0}',
+            '.sub-store-page .sub-store-primary-actions{flex:none;margin:0}',
             '.sub-store-page .sub-store-address-control{display:flex;align-items:stretch;gap:.4em;max-width:48em}',
             '.sub-store-page .sub-store-address-control .cbi-input-text{box-sizing:border-box;flex:1;min-width:0;width:auto!important}',
             '.sub-store-page .sub-store-service-actions{padding-top:.7em;border-top:1px solid var(--border-color,#ddd)}',
@@ -497,16 +506,16 @@ return view.extend({
             '.sub-store-page #cbi-sub-store-main-_logs{display:block!important}',
             '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-title{display:none!important}',
             '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{display:block!important;width:100%!important;max-width:none!important;margin:0!important}',
-            '.sub-store-page .sub-store-image-digest{color:#7b8190;font-family:monospace}',
+            '.sub-store-page .sub-store-image-digest{display:inline-block;max-width:min(100%,40rem);overflow:hidden;text-overflow:ellipsis;vertical-align:middle;white-space:nowrap;font-family:monospace}',
             '.sub-store-page .sub-store-log-list{display:grid;gap:1em}',
-            '.sub-store-page .sub-store-log-panel{box-sizing:border-box;width:100%;max-width:1280px;margin:0 auto;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:8px;background:var(--background-color-high,#fff)}',
+            '.sub-store-page .sub-store-log-panel{box-sizing:border-box;width:100%;margin:0;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:8px;background:var(--background-color-high,transparent)}',
             '.sub-store-page .sub-store-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75em;flex-wrap:wrap}',
             '.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}',
             '.sub-store-page .sub-store-log-heading{display:flex;align-items:baseline;gap:.65em;flex-wrap:wrap;margin:.85em 0 .4em}',
             '.sub-store-page .sub-store-log-heading .cbi-value-description{margin:0}',
             '.sub-store-page .sub-store-log-output{box-sizing:border-box;width:100%;height:24em;max-height:55vh;overflow:auto;overscroll-behavior:contain;white-space:pre;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:6px;background:var(--background-color-low,#f7f7f7);font-family:monospace;font-size:.9em;line-height:1.5}',
-            '@media(prefers-color-scheme:dark){.sub-store-page .sub-store-status.is-running{color:#b5dfbd;background:#23422b;border-color:#386b44}.sub-store-page .sub-store-status.is-warning{color:#eed694;background:#463a21;border-color:#76602e}}',
-            '@media(max-width:700px){.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
+            '@media(min-width:900px){.sub-store-page .cbi-value{display:grid!important;grid-template-columns:minmax(12rem,18rem) minmax(0,1fr);column-gap:1.5rem;align-items:center}.sub-store-page .cbi-value-title{float:none!important;width:auto!important;margin:0;text-align:right}.sub-store-page .cbi-value-field{width:100%;max-width:54rem;min-width:0;margin:0}.sub-store-page .cbi-value-field .cbi-input-text,.sub-store-page .cbi-value-field select,.sub-store-page .cbi-value-field textarea{box-sizing:border-box;max-width:100%}.sub-store-page .cbi-value-description{max-width:60rem}.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{max-width:none}}',
+            '@media(max-width:899px){.sub-store-page .sub-store-overview-head{align-items:flex-start;flex-direction:column;gap:.4rem}.sub-store-page .sub-store-primary-actions{margin:.25em 0}.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
         ].join('');
         return E('div', { 'class': 'sub-store-page' }, [
             E('style', {}, [pageStyles]),
