@@ -94,6 +94,8 @@ expected="http://$ACCESS_HOST:8081/?api=http%3A%2F%2F$ACCESS_HOST%3A8081%2F$API_
 [ "$(show_api_url)" = "http://$ACCESS_HOST:8080/$API_PATH" ]
 PUBLIC_URL=https://sub.example.test/base
 [ "$(show_url)" = "https://sub.example.test/base/?api=https%3A%2F%2Fsub.example.test%2Fbase%2F$API_PATH" ]
+PUBLIC_URL='https://sub.example.test/a&b+c=d'
+[ "$(show_url)" = "https://sub.example.test/a&b+c=d/?api=https%3A%2F%2Fsub.example.test%2Fa%26b%2Bc%3Dd%2F$API_PATH" ]
 printf '%s' "$(frontend_cors_origins)" | grep -Fq 'https://sub.example.test'
 PUBLIC_URL=""
 MOCK_CONTAINER=1
@@ -119,7 +121,7 @@ grep -Fxq '8080:3000' "$DOCKER_ARGS"
 grep -Fxq 'SUB_STORE_BACKEND_MERGE=' "$DOCKER_ARGS"
 grep -Fxq 'sub-store-data:/opt/app/data' "$DOCKER_ARGS"
 grep -Fxq 'json-file' "$DOCKER_ARGS"
-grep -Fxq 'max-size=512k' "$DOCKER_ARGS"
+grep -Fxq 'max-size=1m' "$DOCKER_ARGS"
 grep -Fxq 'max-file=1' "$DOCKER_ARGS"
 grep -Fxq '60s' "$DOCKER_ARGS"
 grep -Fxq '30s' "$DOCKER_ARGS"

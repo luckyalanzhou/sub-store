@@ -222,7 +222,7 @@ return view.extend({
         if (!this.clearLogsButton) return;
         this.clearLogsButton.hidden = this.activeLog === 'container';
         this.clearLogsButton.disabled = !!this.localBusy || !!(this.state && this.state.busy);
-        this.logHint.textContent = '最多保留 512 KiB，超出部分自动清理。';
+        this.logHint.textContent = '最多保留 1 MiB，超出部分自动清理。';
     },
     paintLog: function() {
         if (!this.logBox || !this.state) return;

@@ -8,7 +8,7 @@ cat > "$TMP/ctl" <<'EOF'
 echo "operation output: $1"
 [ "$1" != "update" ] || {
     if [ -f "$SLOW_UPDATE" ]; then
-        dd if=/dev/zero bs=1024 count=600 2>/dev/null | tr '\000' x
+        dd if=/dev/zero bs=1024 count=1200 2>/dev/null | tr '\000' x
         echo 'operation output: update'
         sleep 2
         exit 0
@@ -41,8 +41,10 @@ run_sh "$TMP/job" update || result=$?
 grep -q '退出码：7' "$TMP/state/status"
 [ ! -d "$TMP/state/lock" ]
 mkdir "$TMP/state/lock"
+printf '%s\n' "$$" > "$TMP/state/lock/pid"
 if run_sh "$TMP/job" stop; then exit 1; fi
 grep -q '退出码：7' "$TMP/state/status"
+rm -f "$TMP/state/lock/pid"
 rmdir "$TMP/state/lock"
 if run_sh "$TMP/job" arbitrary; then exit 1; fi
 run_sh "$TMP/job" --enqueue restart
@@ -63,6 +65,9 @@ elapsed=$(( $(date +%s) - started ))
 [ "$elapsed" -lt 2 ] || { echo "enqueue waited ${elapsed}s for the update worker" >&2; exit 1; }
 [ -d "$TMP/state/lock" ]
 attempt=0
+sleep 1
+live_log_size="$(wc -c < "$TMP/state/output.log" | tr -d '[:space:]')"
+[ "$live_log_size" -le 1048576 ] || { echo "live operation log exceeded its cap: ${live_log_size} bytes" >&2; exit 1; }
 while [ -d "$TMP/state/lock" ]; do
     attempt=$((attempt + 1))
     [ "$attempt" -lt 30 ]
@@ -71,5 +76,21 @@ done
 grep -q success "$TMP/state/phase"
 grep -q 'operation output: update' "$TMP/state/output.log"
 log_size="$(wc -c < "$TMP/state/output.log" | tr -d '[:space:]')"
-[ "$log_size" -eq 524288 ] || { echo "operation log was not capped: ${log_size} bytes" >&2; exit 1; }
+[ "$log_size" -eq 1048576 ] || { echo "operation log was not capped: ${log_size} bytes" >&2; exit 1; }
+
+# A killed worker leaves its lock directory behind. The next request must reclaim it.
+mkdir "$TMP/state/lock"
+printf '%s\n' 0 > "$TMP/state/lock/pid"
+mkfifo "$TMP/state/output.pipe"
+touch "$TMP/state/output.chunk.999"
+run_sh "$TMP/job" --enqueue stop
+attempt=0
+while [ -d "$TMP/state/lock" ]; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 30 ]
+    sleep 1
+done
+grep -q success "$TMP/state/phase"
+[ ! -e "$TMP/state/output.pipe" ]
+[ ! -e "$TMP/state/output.chunk.999" ]
 echo "Operation success, failure and concurrency checks passed."

@@ -3,9 +3,12 @@ set -eu
 
 PACKAGE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 LOG=/tmp/sub-store-run-install.log
-LOG_MAX_BYTES=524288
+LOG_MAX_BYTES=1048576
 INSTALL_STEP="准备安装"
 INSTALL_OK=0
+PLUGIN_BACKUP_DIR=""
+PLUGIN_UPDATE_ACTIVE=0
+PLUGIN_TARGET_PREFIX=""
 : > "$LOG"
 chmod 600 "$LOG"
 PACKAGE_VERSION=dev
@@ -32,9 +35,48 @@ step() {
     INSTALL_STEP="$2"
     say "[$1/6] $INSTALL_STEP"
 }
+
+plugin_target_path() {
+    printf '%s/%s\n' "${PLUGIN_TARGET_PREFIX%/}" "$1"
+}
+
+refresh_luci_cache() {
+    rm -f /tmp/luci-indexcache*
+    rm -rf /tmp/luci-modulecache
+    [ ! -x /etc/init.d/rpcd ] || /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+}
+
+rollback_plugin_update() {
+    [ "$PLUGIN_UPDATE_ACTIVE" = "1" ] || return 0
+    restore_failed=0
+    while IFS=' ' read -r prior_state relative_path; do
+        [ -n "$relative_path" ] || continue
+        target_path="$(plugin_target_path "$relative_path")"
+        case "$prior_state" in
+            present)
+                mkdir -p "$(dirname "$target_path")" || restore_failed=1
+                cp -p "$PLUGIN_BACKUP_DIR/files/$relative_path" "$target_path" 2>/dev/null || restore_failed=1
+                ;;
+            absent)
+                rm -f "$target_path" || restore_failed=1
+                ;;
+        esac
+    done < "$PLUGIN_BACKUP_DIR/states"
+    if [ "$restore_failed" = "1" ]; then
+        say "ERROR: LuCI 回滚未能完整完成；旧文件备份保留在 $PLUGIN_BACKUP_DIR。"
+        return 1
+    fi
+    PLUGIN_UPDATE_ACTIVE=0
+    rm -rf "$PLUGIN_BACKUP_DIR"
+    PLUGIN_BACKUP_DIR=""
+    refresh_luci_cache
+    say "LuCI 插件文件已恢复到更新前状态。"
+}
+
 finish() {
     result=$?
     if [ "$INSTALL_OK" != "1" ]; then
+        rollback_plugin_update || true
         say "安装未完成，阶段：$INSTALL_STEP；退出码：$result"
         say "安装阶段日志：$LOG。修复原因后可以重新上传安装包重试。"
     fi
@@ -83,17 +125,43 @@ fi
 
 if [ "$PLUGIN_ONLY" = "1" ]; then
     step 2 "只更新 LuCI 插件"
-    RUNNING_DIR="$PACKAGE_DIR/.running"
+    PLUGIN_BACKUP_DIR="$(umask 077; mktemp -d /tmp/sub-store-plugin-rollback.XXXXXX)"
+    [ -n "$PLUGIN_BACKUP_DIR" ] && [ -d "$PLUGIN_BACKUP_DIR" ] || fail "Cannot create a temporary rollback directory."
+    : > "$PLUGIN_BACKUP_DIR/states"
+    (cd "$PACKAGE_DIR/root" && find . -type f -print) > "$PLUGIN_BACKUP_DIR/manifest" ||
+        fail "Cannot list plugin package files for rollback protection."
+    printf '%s\n' \
+        ./usr/lib/lua/luci/controller/sub_store.lua \
+        ./usr/lib/lua/luci/model/cbi/sub_store.lua \
+        ./usr/lib/sub-store/check-update >> "$PLUGIN_BACKUP_DIR/manifest"
+    while IFS= read -r package_path; do
+        relative_path="${package_path#./}"
+        target_path="$(plugin_target_path "$relative_path")"
+        if [ -f "$target_path" ]; then
+            mkdir -p "$PLUGIN_BACKUP_DIR/files/$(dirname "$relative_path")" ||
+                fail "Cannot prepare rollback storage for $relative_path."
+            cp -p "$target_path" "$PLUGIN_BACKUP_DIR/files/$relative_path" ||
+                fail "Cannot back up the current $relative_path before updating."
+            printf 'present %s\n' "$relative_path" >> "$PLUGIN_BACKUP_DIR/states"
+        else
+            printf 'absent %s\n' "$relative_path" >> "$PLUGIN_BACKUP_DIR/states"
+        fi
+    done < "$PLUGIN_BACKUP_DIR/manifest"
+    PLUGIN_UPDATE_ACTIVE=1
+
+    RUNNING_DIR="$PLUGIN_BACKUP_DIR/running"
     mkdir -p "$RUNNING_DIR/usr/bin" "$RUNNING_DIR/usr/lib/sub-store"
     for active_file in \
         usr/bin/sub-storectl \
         usr/lib/sub-store/job.sh \
         usr/lib/sub-store/plugin-update; do
-        if [ -f "/$active_file" ]; then
-            mv "/$active_file" "$RUNNING_DIR/$active_file"
+        active_path="$(plugin_target_path "$active_file")"
+        if [ -f "$active_path" ]; then
+            mv "$active_path" "$RUNNING_DIR/$active_file"
         fi
     done
-    (umask 022; cp -R "$PACKAGE_DIR/root/." /)
+    PLUGIN_DEST="${PLUGIN_TARGET_PREFIX:-/}"
+    (umask 022; cp -R "$PACKAGE_DIR/root/." "$PLUGIN_DEST") || fail "Cannot copy updated LuCI plugin files."
     . /usr/lib/sub-store/permissions.sh
     sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
     chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
@@ -107,6 +175,9 @@ if [ "$PLUGIN_ONLY" = "1" ]; then
     rm -rf /tmp/luci-modulecache
     [ ! -x /etc/init.d/rpcd ] || /etc/init.d/rpcd reload
     say "LuCI plugin updated to $PACKAGE_VERSION. The Docker image, container, and data were not changed."
+    rm -rf "$PLUGIN_BACKUP_DIR"
+    PLUGIN_BACKUP_DIR=""
+    PLUGIN_UPDATE_ACTIVE=0
     INSTALL_OK=1
     exit 0
 fi

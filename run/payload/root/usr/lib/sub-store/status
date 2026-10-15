@@ -14,7 +14,7 @@ end
 local state = "/tmp/sub-store-operation/"
 local plugin_update = "/tmp/sub-store-plugin-update/"
 local mode = arg[1] or "summary"
-local busy = sys.call("test -d /tmp/sub-store-operation/lock") == 0
+local busy = sys.call("[ -d /tmp/sub-store-operation/lock ] && grep -Eq '^[1-9][0-9]*$' /tmp/sub-store-operation/lock/pid 2>/dev/null && kill -0 \"$(cat /tmp/sub-store-operation/lock/pid 2>/dev/null)\" 2>/dev/null") == 0
 local result = {
     container = busy and "maintenance" or command("/usr/bin/sub-storectl status"),
     version = read("/etc/sub-store/version"),

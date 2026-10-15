@@ -165,6 +165,7 @@ jobs:
             run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
+            tests/plugin-install-rollback.sh \
             tests/operation-feedback.sh \
             tests/cron-validation.sh \
             tests/docker-volume-storage.sh \
@@ -192,6 +193,7 @@ jobs:
             run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
+            tests/plugin-install-rollback.sh \
             tests/operation-feedback.sh \
             tests/cron-validation.sh \
             tests/docker-volume-storage.sh \
@@ -220,6 +222,7 @@ jobs:
           busybox ash tests/image-update.sh
           BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
           busybox ash tests/install-permissions.sh
+          busybox ash tests/plugin-install-rollback.sh
           busybox ash tests/plugin-update.sh
 
       - name: Check native LuCI view and status endpoint

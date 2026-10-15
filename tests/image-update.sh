@@ -25,6 +25,7 @@ mkdir -p "$VOLUME_PATH"
 printf '%s\n' old-image > "$TEST_DIR/latest"
 : > "$TEST_DIR/docker.log"
 PULL_RESULT=same
+sleep() { :; }
 
 uci() {
     case "$*" in
@@ -76,7 +77,16 @@ docker() {
             target="$4"
             case "$template" in
                 *Config.Image*) echo xream/sub-store:latest ;;
-                *State.Health*) echo healthy ;;
+                *State.Health*)
+                    if [ -f "$TEST_DIR/health-starting" ]; then
+                        health_checks="$(cat "$TEST_DIR/health-checks")"
+                        health_checks=$((health_checks + 1))
+                        printf '%s\n' "$health_checks" > "$TEST_DIR/health-checks"
+                        if [ "$health_checks" -ge 3 ]; then echo healthy; else echo starting; fi
+                    else
+                        echo healthy
+                    fi
+                    ;;
                 *State.Running*) echo true ;;
                 *State.Status*) if [ -f "$TEST_DIR/new" ]; then echo exited; else echo running; fi ;;
                 *Config.Env*)
@@ -114,6 +124,18 @@ if grep -Eq '(^| )stop sub-store|(^| )run ' "$TEST_DIR/docker.log"; then
     echo 'Unchanged image caused a container rebuild.' >&2
     exit 1
 fi
+
+: > "$TEST_DIR/docker.log"
+touch "$TEST_DIR/health-starting"
+printf '0\n' > "$TEST_DIR/health-checks"
+replace_container update > "$TEST_DIR/starting-output"
+grep -Fq 'Waiting for the current container health check' "$TEST_DIR/starting-output"
+grep -Fq 'already uses the latest image' "$TEST_DIR/starting-output"
+if grep -Eq '(^| )stop sub-store|(^| )run ' "$TEST_DIR/docker.log"; then
+    echo 'Update rebuilt a current image while its health check was becoming healthy.' >&2
+    exit 1
+fi
+rm -f "$TEST_DIR/health-starting" "$TEST_DIR/health-checks"
 
 : > "$TEST_DIR/docker.log"
 PULL_RESULT=new

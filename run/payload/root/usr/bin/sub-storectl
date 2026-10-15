@@ -187,7 +187,8 @@ resolve_access_ports() {
 }
 
 urlencode() {
-    printf '%s' "$1" | sed -e 's/%/%25/g' -e 's/:/%3A/g' -e 's|/|%2F|g'
+    printf '%s' "$1" | sed -e 's/%/%25/g' -e 's/:/%3A/g' -e 's|/|%2F|g' \
+        -e 's/&/%26/g' -e 's/+/%2B/g' -e 's/=/%3D/g'
 }
 
 show_url() {
@@ -248,7 +249,7 @@ container_env() {
 container_matches_config() {
     [ "$(docker inspect -f '{{.State.Running}}' sub-store 2>/dev/null || true)" = "true" ] || return 1
     current_health="$(show_health)"
-    case "$current_health" in healthy|starting) ;; *) return 1 ;; esac
+    [ "$current_health" = "healthy" ] || return 1
     latest_id="$(docker image inspect -f '{{.Id}}' xream/sub-store:latest 2>/dev/null || true)"
     container_image_id="$(docker inspect -f '{{.Image}}' sub-store 2>/dev/null || true)"
     [ -n "$latest_id" ] && [ "$container_image_id" = "$latest_id" ] || return 1
@@ -326,7 +327,7 @@ run_container() {
         -e "SUB_STORE_CORS_ALLOWED_ORIGINS=$(frontend_cors_origins)" \
         -e "SUB_STORE_BACKEND_SYNC_CRON=$SYNC_CRON" \
         --log-driver json-file \
-        --log-opt max-size=512k \
+        --log-opt max-size=1m \
         --log-opt max-file=1 \
         --health-cmd "node -e \"const p=process.env.SUB_STORE_FRONTEND_BACKEND_PATH||'';fetch('http://127.0.0.1:3001'+p+'/api/utils/env').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"" \
         --health-interval 60s \
@@ -549,9 +550,15 @@ replace_container() {
         fi
     fi
 
-    if [ "${1:-}" = "update" ] && [ "$HAD_OLD_CONTAINER" = "1" ] && container_matches_config; then
-        echo "Current container already uses the latest image; no rebuild is required."
-        return 0
+    if [ "${1:-}" = "update" ] && [ "$HAD_OLD_CONTAINER" = "1" ]; then
+        if [ "$(show_health)" = "starting" ]; then
+            echo "Waiting for the current container health check before deciding whether to rebuild..."
+            wait_for_current_health 30 || true
+        fi
+        if container_matches_config; then
+            echo "Current container already uses the latest image; no rebuild is required."
+            return 0
+        fi
     fi
 
     if [ "$HAD_OLD_CONTAINER" = "1" ]; then
@@ -614,6 +621,22 @@ clear_local_logs() {
 
 show_health() {
     docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' sub-store 2>/dev/null || true
+}
+
+wait_for_current_health() {
+    attempts="${1:-30}"
+    n=0
+    while [ "$n" -lt "$attempts" ]; do
+        current_health="$(show_health)"
+        case "$current_health" in
+            healthy) return 0 ;;
+            starting) ;;
+            *) return 1 ;;
+        esac
+        n=$((n + 1))
+        sleep 2
+    done
+    [ "$(show_health)" = "healthy" ]
 }
 
 show_app_version() {
