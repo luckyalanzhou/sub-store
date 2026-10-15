@@ -22,9 +22,10 @@
 | --- | --- | --- |
 | iStoreOS 24.10 | `.run` | iStore → 手动安装；自解压部署安装器 |
 | iStoreOS / OpenWrt 24.10 | `.ipk` | 系统 → 软件包 → 上传安装，或 `opkg install` |
-| iStoreOS / OpenWrt 25.12 | `.apk` | iStore → 手动安装，或 `apk add --allow-untrusted` |
+| iStoreOS 25.12 | `.apk` | 支持 APK 上传的新版 iStore，或 `apk add --allow-untrusted` |
+| OpenWrt 25.12 | `.apk` | `apk add --allow-untrusted`；未安装 iStore 时使用命令行 |
 
-iStore「手动安装」也接受三种格式：`.run` 会执行安装器，`.ipk` 和 `.apk` 会交给设备对应的包管理器。iStoreOS / OpenWrt 25.12 的系统软件页面可能拒绝未签名的本地 `.apk`；此时请用 iStore 手动安装或命令行安装。
+iStore「手动安装」可安装 `.run` 和 `.ipk`；支持 APK 上传的新版页面也可安装 `.apk`。`.run` 会执行自解压安装器，原生包交给设备对应的包管理器。请按系统版本选择匹配的原生包。通用 OpenWrt 不一定预装 iStore；没有 iStore 或页面不接受 `.apk` 时，通过 SSH 使用对应包管理器。25.12 的系统软件页面可能拒绝未签名的本地 `.apk`，可用 `apk add --allow-untrusted` 安装。
 
 终端安装原生包示例，将版本号改为所下载附件的版本，并只执行与设备系统匹配的一组命令：
 
