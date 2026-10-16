@@ -13,6 +13,7 @@ function setup() {
             throw new TypeError('event.currentTarget is required');
         return fn.apply(ctx, args);
     }, changes: { init: async () => {} },
+        tabs: { initTabGroup: panes => calls.push(['tabs', panes]) },
         addNotification: (...args) => calls.push(['notice', ...args]), showModal: (...args) => calls.push(['modal', ...args]), hideModal() {} };
     const uci = { load: async () => {}, unload() {} };
     const backend = { exec: async (path, args) => {
@@ -25,11 +26,21 @@ function setup() {
         return { code: 0, stdout: 'accepted' };
     } };
     class Map {
-        constructor(...args) { this.args = args; this.tabs = []; }
-        section() { const map = this; return { tab(name, label) { map.tabs.push({ name, label }); }, taboption(tab, type, name, label) {
-            const option = { tab, type, name, label, formvalue: () => option.input };
-            options[name] = option; return option;
-        } }; }
+        constructor(...args) { this.args = args; this.sections = []; }
+        section(...args) {
+            const map = this;
+            const section = { args, tabs: [], options: [], tab(name, label) { section.tabs.push({ name, label }); },
+                option(type, name, label) { return addOption(undefined, type, name, label); },
+                taboption(tab, type, name, label) { return addOption(tab, type, name, label); } };
+            const addOption = (tab, type, name, label) => {
+                const option = { tab, type, name, label, formvalue: () => option.input };
+                section.options.push(option);
+                options[name] = option;
+                return option;
+            };
+            map.sections.push(section);
+            return section;
+        }
         async render() { return E('form'); }
         async save() { calls.push(['save']); }
         async load() {}
@@ -45,9 +56,14 @@ test('native page groups settings, masks key and schedules status polling', asyn
     const t = setup(); const page = await t.view.render(await t.view.load());
     assert.equal(page.tag, 'form');
     assert.deepEqual(t.view.map.args, ['sub-store', 'sub-store', '管理 Docker 服务；订阅与配置在 Sub-Store 操作。']);
-    assert.deepEqual(t.view.map.tabs.map(tab => tab.name), ['overview', 'basic', 'advanced', 'runtime-logs', 'maintenance-logs', 'maintenance']);
+    assert.equal(t.view.map.sections.length, 2);
+    assert.deepEqual(t.view.map.sections[0].options.map(option => option.name), [
+        '_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'
+    ]);
+    assert.equal(t.view.map.sections[0].args[3], '服务概览');
+    assert.deepEqual(t.view.map.sections[1].tabs.map(tab => tab.name), ['basic', 'advanced', 'logs', 'maintenance']);
     for (const id of ['_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'])
-        assert.equal(t.options[id].tab, 'overview');
+        assert.equal(t.options[id].tab, undefined);
     assert.equal(t.options.frontend_port.tab, 'basic');
     assert.equal(t.options.public_url.tab, 'basic');
     assert.equal(t.options.backend_port.tab, 'advanced');
@@ -57,8 +73,8 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.options.backend_lan_access.default, '0');
     assert.equal(t.polls.length, 1);
     assert.equal(t.view.open.href, t.state.url);
-    assert.equal(t.view.open.children[0], '打开 sub-store');
-    assert.equal(t.view.open.class, 'cbi-button cbi-button-positive');
+    assert.equal(t.view.open.children[0], '打开');
+    assert.equal(t.view.open.class, 'btn small cbi-button cbi-button-positive');
     assert.equal(t.view.address['aria-label'], '访问地址');
     assert.equal(t.view.copyAddressButton.children[0], '复制');
     assert.equal(t.view.copyAddressButton['aria-label'], '复制访问地址');
@@ -86,14 +102,14 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBoxes.container.value, 'runtime log');
     assert.equal(t.view.logBoxes.operation.value, 'maintenance log');
-    assert.equal(t.options._runtime_logs.tab, 'runtime-logs');
-    assert.equal(t.options._maintenance_logs.tab, 'maintenance-logs');
-    assert.equal(t.options._runtime_logs.description, '最多保留 1 MiB，超出部分自动清理。');
-    assert.equal(t.options._maintenance_logs.description, '最多保留 1 MiB，超出部分自动清理。');
+    assert.equal(t.options._logs.tab, 'logs');
+    assert.equal(t.options._logs.description, '每类日志最多保留 1 MiB，超出部分自动清理。');
     assert.equal(t.view.clearLogButtons.container.children[0], '清空日志');
     assert.equal(t.view.clearLogButtons.operation.children[0], '清空日志');
-    assert.equal(t.options._runtime_logs.renderWidget().children[0], t.view.clearLogButtons.container);
-    assert.equal(t.options._maintenance_logs.renderWidget().children[0], t.view.clearLogButtons.operation);
+    assert.equal(t.options._logs.renderWidget().children[0], t.view.logPanes[0]);
+    assert.deepEqual(t.view.logPanes.map(pane => pane['data-tab-title']), ['运行日志', '维护日志']);
+    assert.equal(t.view.logPanes[0].children[0].children[0], t.view.clearLogButtons.container);
+    assert.equal(t.view.logPanes[1].children[0].children[0], t.view.clearLogButtons.operation);
     assert.doesNotMatch(source, /刷新日志/);
     t.state.container_log = 'refreshed runtime log';
     t.state.output = 'refreshed maintenance log';
@@ -304,10 +320,11 @@ test('logs are displayed as text and stopped container hides open link', async (
 });
 test('service diagnostics stay automatic without a manual log action', async () => {
     const t = setup(); await t.view.render(await t.view.load());
-    assert.equal(t.options._runtime_logs.label, '运行日志');
-    assert.equal(t.options._maintenance_logs.label, '维护日志');
-    assert.equal(t.options._runtime_logs.renderWidget().children[0], t.view.clearLogButtons.container);
-    assert.equal(t.options._maintenance_logs.renderWidget().children[0], t.view.clearLogButtons.operation);
+    assert.equal(t.options._logs.label, '日志');
+    assert.deepEqual(t.view.logPanes.map(pane => pane['data-tab-title']), ['运行日志', '维护日志']);
+    assert.equal(t.options._logs.renderWidget().children[0], t.view.logPanes[0]);
+    assert.equal(t.view.logPanes[0].children[0].children[0], t.view.clearLogButtons.container);
+    assert.equal(t.view.logPanes[1].children[0].children[0], t.view.clearLogButtons.operation);
     assert.doesNotMatch(source, /检查服务|action === 'check'/);
     const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');
     assert.doesNotMatch(controller, /^\s*check\)/m);

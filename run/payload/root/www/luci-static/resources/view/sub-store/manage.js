@@ -340,7 +340,7 @@ return view.extend({
         this.version = E('span');
         this.address = E('input', { id: 'sub-store-management-address', 'class': 'cbi-input-text', readonly: true,
             'aria-label': '访问地址' });
-        this.open = E('a', { 'class': 'cbi-button cbi-button-positive', target: '_blank', rel: 'noopener noreferrer' }, ['打开 sub-store']);
+        this.open = E('a', { 'class': 'btn small cbi-button cbi-button-positive', target: '_blank', rel: 'noopener noreferrer' }, ['打开']);
         this.copyAddressButton = E('button', { type: 'button', 'class': 'cbi-button', 'aria-label': '复制访问地址', click: ui.createHandlerFn(this, async function() {
             if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(this.address.value);
             else {
@@ -353,24 +353,28 @@ return view.extend({
         this.stopButton = this.button('停止服务', 'stop', 'negative');
         this.restartButton = this.button('重启服务', 'restart');
         const m = this.map = new form.Map('sub-store', 'sub-store', '管理 Docker 服务；订阅与配置在 Sub-Store 操作。');
+        const overview = m.section(form.NamedSection, 'main', 'settings', '服务概览');
         const s = m.section(form.NamedSection, 'main', 'settings');
-        s.tab('overview', '服务概览');
         s.tab('basic', '基本设置');
         s.tab('advanced', '高级设置');
-        s.tab('runtime-logs', '运行日志');
-        s.tab('maintenance-logs', '维护日志');
+        s.tab('logs', '日志');
         s.tab('maintenance', '更新维护');
+        const displayOverview = (id, label, node) => {
+            const option = overview.option(form.DummyValue, id, label);
+            option.renderWidget = function() { return node; };
+            return option;
+        };
         const display = (tab, id, label, node, description) => {
             const option = s.taboption(tab, form.DummyValue, id, label);
             if (description) option.description = description;
             option.renderWidget = function() { return node; };
             return option;
         };
-        display('overview', '_service_status', '服务状态', this.status);
-        display('overview', '_plugin_version', '插件版本', this.version);
-        display('overview', '_management_ui', '管理界面', this.open);
-        display('overview', '_management_address', '管理访问地址', E('div', {}, [this.address, this.copyAddressButton]));
-        display('overview', '_service_control', '服务控制', E('div', {}, [
+        displayOverview('_service_status', '服务状态', this.status);
+        displayOverview('_plugin_version', '插件版本', this.version);
+        displayOverview('_management_ui', '管理界面', this.open);
+        displayOverview('_management_address', '管理访问地址', E('div', {}, [this.address, this.copyAddressButton]));
+        displayOverview('_service_control', '服务控制', E('div', {}, [
             this.startButton, ' ', this.stopButton, ' ', this.restartButton
         ]));
         let o = s.taboption('basic', form.Value, 'frontend_port', '管理页面端口');
@@ -442,8 +446,12 @@ return view.extend({
         };
         const runtimeLogs = logSection('container', '运行日志', 'clear-runtime-logs');
         const maintenanceLogs = logSection('operation', '维护日志', 'clear-maintenance-logs');
-        display('runtime-logs', '_runtime_logs', '运行日志', runtimeLogs, '最多保留 1 MiB，超出部分自动清理。');
-        display('maintenance-logs', '_maintenance_logs', '维护日志', maintenanceLogs, '最多保留 1 MiB，超出部分自动清理。');
+        this.logPanes = [
+            E('div', { 'data-tab': 'runtime', 'data-tab-title': '运行日志', 'data-tab-active': 'true' }, [runtimeLogs]),
+            E('div', { 'data-tab': 'maintenance', 'data-tab-title': '维护日志' }, [maintenanceLogs])
+        ];
+        const logsPanel = E('div', {}, this.logPanes);
+        display('logs', '_logs', '日志', logsPanel, '每类日志最多保留 1 MiB，超出部分自动清理。');
         display('advanced', '_api', '后端直连地址', this.api);
         display('advanced', '_storage', '实际数据存储路径', this.storage);
         const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
@@ -460,6 +468,7 @@ return view.extend({
         ]));
         display('maintenance', '_rotate', 'API 密钥', rotate, '重新生成后，旧管理地址立即失效。');
         const formNode = await m.render();
+        ui.tabs.initTabGroup(this.logPanes);
         this.paint();
         this.pollCycle = 0;
         poll.add(async () => {
