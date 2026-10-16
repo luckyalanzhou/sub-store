@@ -138,7 +138,6 @@ return view.extend({
             return true;
         } catch (error) {
             this.status.textContent = '状态读取失败：' + error.message;
-            this.status.className = 'alert-message warning';
             return false;
         }
     },
@@ -149,13 +148,12 @@ return view.extend({
         this.status.textContent = unhealthy ? 'sub-store 服务运行异常' : starting ? 'sub-store 服务正在启动检查' :
             s.container === 'running' ? 'sub-store 服务已启动' :
                 'sub-store 服务状态：' + (names[s.container] || s.container || '状态未知');
-        this.status.className = s.container === 'running' && !unhealthy ? 'sub-store-status is-running' : 'sub-store-status is-warning';
         this.version.textContent = '插件版本：' + (s.version || '未知');
         this.address.value = s.url || '';
         this.open.href = s.url || '#';
         this.open.hidden = !s.url || s.container !== 'running';
         this.copyAddressButton.disabled = !s.url;
-        this.storage.textContent = s.storage || '实际路径暂不可用';
+        this.storage.value = s.storage || '实际路径暂不可用';
         const image = String(s.image || '').split(/\s+\/\s+/, 2);
         this.image.textContent = image[0] || '容器镜像未就绪';
         this.imageDigest.textContent = image[1] ? image[1].slice(0, 19) + '…' : '';
@@ -228,14 +226,15 @@ return view.extend({
             if (!box) return;
             const text = logs[name] || '暂无日志';
             const wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 24;
-            if (box.textContent !== text) box.textContent = text;
+            if (box.value !== text) box.value = text;
             if (this.followLogs[name] || wasAtBottom) box.scrollTop = box.scrollHeight;
             this.followLogs[name] = false;
         });
     },
     refreshLogs: async function() {
-        if (!this.logPanel) return;
-        if ('offsetParent' in this.logPanel && this.logPanel.offsetParent === null) return;
+        if (!this.logBoxes) return;
+        const boxes = Object.values(this.logBoxes);
+        if (boxes.length && boxes.every(box => 'offsetParent' in box && box.offsetParent === null)) return;
         try {
             const logs = await this.snapshot('logs');
             this.state = Object.assign(this.state || {}, logs);
@@ -309,7 +308,7 @@ return view.extend({
         ])]);
     },
     button: function(label, action, style) {
-        const button = E('button', { 'class': 'cbi-button cbi-button-' + (style || 'action'),
+        const button = E('button', { type: 'button', 'class': 'cbi-button cbi-button-' + (style || 'action'),
             click: ui.createHandlerFn(this, function() { return this.run(action); }) }, [label]);
         this.buttons.push(button);
         return button;
@@ -336,12 +335,12 @@ return view.extend({
     render: async function(data) {
         this.state = data[1];
         this.buttons = [];
-        this.status = E('p');
-        this.version = E('p');
+        this.status = E('span');
+        this.version = E('span');
         this.address = E('input', { id: 'sub-store-management-address', 'class': 'cbi-input-text', readonly: true,
             'aria-label': '访问地址' });
-        this.open = E('a', { 'class': 'cbi-button cbi-button-positive sub-store-open-button', target: '_blank', rel: 'noopener noreferrer' }, ['打开 sub-store']);
-        this.copyAddressButton = E('button', { 'class': 'cbi-button', 'aria-label': '复制访问地址', click: ui.createHandlerFn(this, async function() {
+        this.open = E('a', { 'class': 'cbi-button cbi-button-positive', target: '_blank', rel: 'noopener noreferrer' }, ['打开 sub-store']);
+        this.copyAddressButton = E('button', { type: 'button', 'class': 'cbi-button', 'aria-label': '复制访问地址', click: ui.createHandlerFn(this, async function() {
             if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(this.address.value);
             else {
                 this.address.focus(); this.address.select();
@@ -352,26 +351,26 @@ return view.extend({
         this.startButton = this.button('启动服务', 'start');
         this.stopButton = this.button('停止服务', 'stop', 'negative');
         this.restartButton = this.button('重启服务', 'restart');
-        const statusSection = E('div', { 'class': 'cbi-section sub-store-overview' }, [
-            E('div', { 'class': 'sub-store-overview-head' }, [
-                E('div', { 'class': 'sub-store-overview-info' }, [E('h3', {}, ['服务概览']), this.status, this.version]),
-                E('div', { 'class': 'sub-store-primary-actions' }, [this.open])
-            ]),
-            E('div', { 'class': 'sub-store-service-actions' }, [
-                E('span', { 'class': 'sub-store-action-label' }, ['服务控制']),
-                this.startButton, this.stopButton, this.restartButton
-            ]),
-            E('div', { 'class': 'sub-store-address-field' }, [
-                E('label', { 'class': 'sub-store-address-label', for: 'sub-store-management-address' }, ['访问地址']),
-                E('div', { 'class': 'sub-store-address-control' }, [this.address, this.copyAddressButton])
-            ])
-        ]);
-        const m = this.map = new form.Map('sub-store', null, 'Docker 服务管理；订阅与配置在 Sub-Store 操作。');
+        const m = this.map = new form.Map('sub-store', 'sub-store', '管理 Docker 服务；订阅与配置在 Sub-Store 操作。');
         const s = m.section(form.NamedSection, 'main', 'settings');
+        s.tab('overview', '服务概览');
         s.tab('basic', '基本设置');
         s.tab('advanced', '高级设置');
         s.tab('logs', '日志与诊断');
         s.tab('maintenance', '更新维护');
+        const display = (tab, id, label, node, description) => {
+            const option = s.taboption(tab, form.DummyValue, id, label);
+            if (description) option.description = description;
+            option.renderWidget = function() { return node; };
+            return option;
+        };
+        display('overview', '_service_status', '服务状态', this.status);
+        display('overview', '_plugin_version', '插件版本', this.version);
+        display('overview', '_management_ui', '管理界面', this.open);
+        display('overview', '_management_address', '管理访问地址', E('div', {}, [this.address, this.copyAddressButton]));
+        display('overview', '_service_control', '服务控制', E('div', {}, [
+            this.startButton, ' ', this.stopButton, ' ', this.restartButton
+        ]));
         let o = s.taboption('basic', form.Value, 'frontend_port', '管理页面端口');
         o.datatype = 'port'; o.rmempty = false; o.default = '3001';
         o.description = '默认 3001；保存后更新 Docker 端口映射，外部端口转发需另行调整。';
@@ -408,10 +407,10 @@ return view.extend({
         o.default = '55 23 * * *'; o.rmempty = false;
         o.description = '默认每天北京时间 23:55；不了解 Cron 时保持默认。';
         o.validate = function(section, value) { return validCron(value) || 'Cron 格式或字段范围不正确。'; };
-        this.api = E('input', { readonly: true, style: 'width:100%', 'aria-label': '后端直连地址' });
-        this.storage = E('pre', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' });
+        this.api = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '后端直连地址' });
+        this.storage = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '实际数据存储路径' });
         this.image = E('span');
-        this.imageDigest = E('small', { 'class': 'sub-store-image-digest' });
+        this.imageDigest = E('small');
         this.appVersion = E('span');
         this.created = E('span');
         this.updateStatus = E('span', { 'aria-live': 'polite' }, ['尚未检查更新']);
@@ -421,8 +420,9 @@ return view.extend({
         this.clearLogButtons = {};
         const logSection = (name, title, action) => {
             const runtime = name === 'container';
-            const box = E('pre', { 'class': 'sub-store-log-output', role: 'log', 'aria-label': title });
-            const clearButton = E('button', { 'class': 'cbi-button cbi-button-negative',
+            const box = E('textarea', { 'class': 'cbi-input-textarea', readonly: true, rows: 20, wrap: 'off',
+                role: 'log', 'aria-label': title });
+            const clearButton = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
                 click: ui.createHandlerFn(this, function() {
                     const running = this.state && this.state.container === 'running';
                     const message = runtime ?
@@ -433,92 +433,33 @@ return view.extend({
             this.logBoxes[name] = box;
             this.clearLogButtons[name] = clearButton;
             this.buttons.push(clearButton);
-            return E('div', { 'class': 'sub-store-log-panel' }, [
-                E('div', { 'class': 'sub-store-log-toolbar' }, [
-                    E('strong', { 'aria-live': 'polite' }, [title]),
-                    E('div', { 'class': 'sub-store-log-actions' }, [clearButton])
-                ]),
-                E('div', { 'class': 'sub-store-log-heading' }, [
-                    E('span', { 'class': 'cbi-value-description' }, ['最多保留 1 MiB，超出部分自动清理。'])
-                ]),
-                box
-            ]);
+            return E('div', {}, [clearButton, box]);
         };
-        const logPanel = this.logPanel = E('div', { 'class': 'sub-store-log-list' }, [
-            logSection('container', '运行日志', 'clear-runtime-logs'),
-            logSection('operation', '维护日志', 'clear-maintenance-logs')
-        ]);
-        const display = (tab, id, label, node) => {
-            const option = s.taboption(tab, form.DummyValue, id, label);
-            option.renderWidget = function() { return node; };
-        };
+        const runtimeLogs = logSection('container', '运行日志', 'clear-runtime-logs');
+        const maintenanceLogs = logSection('operation', '维护日志', 'clear-maintenance-logs');
+        display('logs', '_runtime_logs', '运行日志', runtimeLogs, '最多保留 1 MiB，超出部分自动清理。');
+        display('logs', '_maintenance_logs', '维护日志', maintenanceLogs, '最多保留 1 MiB，超出部分自动清理。');
         display('advanced', '_api', '后端直连地址', this.api);
         display('advanced', '_storage', '实际数据存储路径', this.storage);
-        const rotate = E('button', { 'class': 'cbi-button cbi-button-negative',
+        const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
             click: ui.createHandlerFn(this, function() {
                 return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');
             }) }, ['重新生成密钥']);
         this.buttons.push(rotate);
         const imageValue = E('span', {}, [this.image, ' ', this.imageDigest]);
-        const displayMaintenance = (id, label, node, description) => {
-            const option = s.taboption('maintenance', form.DummyValue, id, label);
-            if (description) option.description = description;
-            option.renderWidget = function() { return node; };
-        };
-        displayMaintenance('_image', 'Docker 镜像', imageValue);
-        displayMaintenance('_app_version', 'Sub-Store 版本', this.appVersion);
-        displayMaintenance('_created', '容器创建时间', this.created);
-        displayMaintenance('_updates', '插件与镜像更新', E('div', {}, [
+        display('maintenance', '_image', 'Docker 镜像', imageValue);
+        display('maintenance', '_app_version', 'Sub-Store 版本', this.appVersion);
+        display('maintenance', '_created', '容器创建时间', this.created);
+        display('maintenance', '_updates', '插件与镜像更新', E('div', {}, [
             this.updateButton, ' ', E('span', { 'aria-live': 'polite' }, [this.updateStatus])
         ]));
-        displayMaintenance('_rotate', 'API 密钥', rotate, '重新生成后，旧管理地址立即失效。');
-        display('logs', '_logs', '', logPanel);
+        display('maintenance', '_rotate', 'API 密钥', rotate, '重新生成后，旧管理地址立即失效。');
         const formNode = await m.render();
         this.paint();
         poll.add(async () => {
             await this.refresh('summary');
             await this.refreshLogs();
         }, 5);
-        const pageStyles = [
-            '.sub-store-page{box-sizing:border-box;width:100%;max-width:1320px;margin:0 auto;padding:0 clamp(.75rem,2vw,1.5rem)}',
-            '.sub-store-page *{box-sizing:border-box}',
-            '.sub-store-page h2{margin:0 0 .8em;font-size:1.45rem}',
-            '.sub-store-page .sub-store-overview{margin:0 0 1.2em;padding:1em 1.1em;border:1px solid var(--border-color,#ddd);border-radius:.5em;background:var(--background-color-high,transparent)}',
-            '.sub-store-page .sub-store-overview-head{display:flex;align-items:center;justify-content:space-between;gap:1em}',
-            '.sub-store-page .sub-store-overview-info{display:flex;align-items:center;flex-wrap:wrap;gap:.5em 1em;min-width:0}',
-            '.sub-store-page .sub-store-overview-info h3{margin:0;font-size:1.1rem}',
-            '.sub-store-page .sub-store-overview-info p{margin:0}',
-            '.sub-store-page .sub-store-status{display:inline-flex;align-items:center;gap:.45em;max-width:100%;margin:0;padding:.3em .6em;border:1px solid var(--border-color,#ddd);border-radius:4px;background:var(--background-color-low,transparent);font-weight:600;line-height:1.4}',
-            '.sub-store-page .sub-store-status:before{content:"";width:.5em;height:.5em;flex:none;border-radius:50%}',
-            '.sub-store-page .sub-store-status.is-running:before{background:#32934b}',
-            '.sub-store-page .sub-store-status.is-warning:before{background:#c58a18}',
-            '.sub-store-page .sub-store-open-button{text-transform:none}',
-            '.sub-store-page .sub-store-primary-actions,.sub-store-page .sub-store-service-actions{display:flex;align-items:center;gap:.5em;flex-wrap:wrap;margin:.8em 0 0}',
-            '.sub-store-page .sub-store-primary-actions{flex:none;margin:0}',
-            '.sub-store-page .sub-store-service-actions{padding-top:.8em;border-top:1px solid var(--border-color,#ddd)}',
-            '.sub-store-page .sub-store-action-label,.sub-store-page .sub-store-address-label{font-weight:600}',
-            '.sub-store-page .sub-store-address-label{display:block;margin:.9em 0 .35em}',
-            '.sub-store-page .sub-store-address-control{display:flex;align-items:stretch;gap:.4em;width:100%;max-width:52rem}',
-            '.sub-store-page .sub-store-address-control .cbi-input-text{flex:1;min-width:0;width:100%}',
-            '.sub-store-page .cbi-value-field{min-width:0}',
-            '.sub-store-page .cbi-value-field .cbi-input-text,.sub-store-page .cbi-value-field select,.sub-store-page .cbi-value-field textarea{max-width:38rem;width:100%}',
-            '.sub-store-page #cbi-sub-store-main-_api .cbi-input-text{max-width:52rem}',
-            '.sub-store-page #cbi-sub-store-main-_storage pre{margin:0;padding:.65em .8em;border-radius:.35em;background:var(--background-color-low,transparent);white-space:pre-wrap;overflow-wrap:anywhere}',
-            '.sub-store-page #cbi-sub-store-main-_logs{display:block!important}',
-            '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-title{display:none!important}',
-            '.sub-store-page #cbi-sub-store-main-_logs>.cbi-value-field{display:block!important;width:100%!important;max-width:none!important;margin:0!important}',
-            '.sub-store-page .sub-store-image-digest{display:inline-block;max-width:min(100%,40rem);overflow:hidden;text-overflow:ellipsis;vertical-align:middle;white-space:nowrap;font-family:monospace}',
-            '.sub-store-page .sub-store-log-list{display:grid;gap:1em}',
-            '.sub-store-page .sub-store-log-panel{width:100%;min-width:0;margin:0;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:.5em;background:var(--background-color-high,transparent)}',
-            '.sub-store-page .sub-store-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:.75em;flex-wrap:wrap}',
-            '.sub-store-page .sub-store-log-actions{display:flex;gap:.4em;flex-wrap:wrap}',
-            '.sub-store-page .sub-store-log-heading{display:flex;align-items:baseline;gap:.65em;flex-wrap:wrap;margin:.85em 0 .4em}',
-            '.sub-store-page .sub-store-log-heading .cbi-value-description{margin:0}',
-            '.sub-store-page .sub-store-log-output{width:100%;height:24em;max-height:55vh;overflow:auto;overscroll-behavior:contain;white-space:pre;padding:.85em;border:1px solid var(--border-color,#bbb);border-radius:.35em;background:var(--background-color-low,transparent);font-family:monospace;font-size:.9em;line-height:1.5}',
-            '@media(max-width:767px){.sub-store-page{padding:0 .75rem}.sub-store-page .sub-store-overview-head{align-items:flex-start;flex-direction:column;gap:.6em}.sub-store-page .sub-store-primary-actions{margin:0}.sub-store-page .sub-store-service-actions{align-items:stretch}.sub-store-page .sub-store-action-label{width:100%}.sub-store-page .sub-store-log-toolbar,.sub-store-page .sub-store-log-actions{align-items:stretch}.sub-store-page .sub-store-log-actions{width:100%}.sub-store-page .sub-store-log-output{height:20em;max-height:50vh}}'
-        ].join('');
-        return E('div', { 'class': 'sub-store-page' }, [
-            E('style', {}, [pageStyles]),
-            E('h2', {}, ['sub-store']), statusSection, formNode]);
+        return formNode;
     }
 });

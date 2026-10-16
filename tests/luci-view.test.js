@@ -25,8 +25,9 @@ function setup() {
         return { code: 0, stdout: 'accepted' };
     } };
     class Map {
-        section() { return { tab() {}, taboption(tab, type, name) {
-            const option = { tab, formvalue: () => option.input };
+        constructor(...args) { this.args = args; this.tabs = []; }
+        section() { const map = this; return { tab(name, label) { map.tabs.push({ name, label }); }, taboption(tab, type, name, label) {
+            const option = { tab, type, name, label, formvalue: () => option.input };
             options[name] = option; return option;
         } }; }
         async render() { return E('form'); }
@@ -42,6 +43,11 @@ function setup() {
 }
 test('native page groups settings, masks key and schedules status polling', async () => {
     const t = setup(); const page = await t.view.render(await t.view.load());
+    assert.equal(page.tag, 'form');
+    assert.deepEqual(t.view.map.args, ['sub-store', 'sub-store', '管理 Docker 服务；订阅与配置在 Sub-Store 操作。']);
+    assert.deepEqual(t.view.map.tabs.map(tab => tab.name), ['overview', 'basic', 'advanced', 'logs', 'maintenance']);
+    for (const id of ['_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'])
+        assert.equal(t.options[id].tab, 'overview');
     assert.equal(t.options.frontend_port.tab, 'basic');
     assert.equal(t.options.public_url.tab, 'basic');
     assert.equal(t.options.backend_port.tab, 'advanced');
@@ -51,26 +57,22 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.polls.length, 1);
     assert.equal(t.view.open.href, t.state.url);
     assert.equal(t.view.open.children[0], '打开 sub-store');
-    assert.match(t.view.open.class, /sub-store-open-button/);
+    assert.equal(t.view.open.class, 'cbi-button cbi-button-positive');
     assert.equal(t.view.address['aria-label'], '访问地址');
     assert.equal(t.view.copyAddressButton.children[0], '复制');
     assert.equal(t.view.copyAddressButton['aria-label'], '复制访问地址');
     assert.equal(t.view.copyAddressButton.disabled, false);
-    const addressControl = page.children[2].children[2].children[1];
+    const addressControl = t.options._management_address.renderWidget();
     assert.deepEqual(addressControl.children, [t.view.address, t.view.copyAddressButton]);
     assert.equal(t.view.status.textContent, 'sub-store 服务已启动');
-    assert.equal(t.view.status.className, 'sub-store-status is-running');
+    assert.equal(t.view.status.className, undefined);
     assert.equal(t.view.startButton.disabled, true);
     assert.equal(t.view.stopButton.disabled, false);
     assert.equal(t.view.restartButton.disabled, false);
     assert.equal(t.view.appVersion.textContent, '2.42.3');
     assert.equal(t.view.image.textContent, '容器镜像未就绪');
     assert.equal(t.view.imageDigest.hidden, true);
-    assert.equal(page.children[2].children[0].children[0].children[0].children[0], '服务概览');
-    assert.match(source, /sub-store-status\{display:inline-flex/);
-    assert.match(source, /sub-store-status\{[^}]*border-radius:4px/);
-    assert.match(source, /sub-store-open-button\{text-transform:none\}/);
-    assert.equal(t.view.storage.textContent, t.state.storage);
+    assert.equal(t.view.storage.value, t.state.storage);
     for (const id of ['_image', '_app_version', '_created', '_updates', '_rotate'])
         assert.equal(t.options[id].tab, 'maintenance');
     assert.equal(t.options._maintenance, undefined);
@@ -78,29 +80,25 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.doesNotMatch(source, /完整地址含 API 参数/);
     assert.doesNotMatch(source, /sub-store-maintenance-(?:panel|card|row)/);
     assert.doesNotMatch(source, /#cbi-sub-store-main-_maintenance/);
-    assert.match(source, /max-width:1320px/);
-    assert.doesNotMatch(source, /grid-template-columns:minmax\(12rem,18rem\)/);
-    assert.doesNotMatch(source, /\.cbi-value\{display:grid!important/);
-    assert.match(source, /background:var\(--background-color-high,transparent\)/);
-    assert.match(source, /@media\(max-width:767px\)/);
-    assert.doesNotMatch(source, /prefers-color-scheme:dark/);
-    assert.match(source, /\.cbi-value-field\{min-width:0\}/);
-    assert.match(source, /--border-color/);
-    assert.match(source, /#cbi-sub-store-main-_logs/);
+    assert.doesNotMatch(source, /sub-store-page|sub-store-overview|sub-store-status|sub-store-log-panel|pageStyles|E\('style'/);
+    assert.match(source, /'class': 'cbi-input-textarea'/);
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
-    assert.equal(t.view.logBoxes.container.textContent, 'runtime log');
-    assert.equal(t.view.logBoxes.operation.textContent, 'maintenance log');
-    assert.equal(t.view.logPanel.children.length, 2);
+    assert.equal(t.view.logBoxes.container.value, 'runtime log');
+    assert.equal(t.view.logBoxes.operation.value, 'maintenance log');
+    assert.equal(t.options._runtime_logs.tab, 'logs');
+    assert.equal(t.options._maintenance_logs.tab, 'logs');
+    assert.equal(t.options._runtime_logs.description, '最多保留 1 MiB，超出部分自动清理。');
+    assert.equal(t.options._maintenance_logs.description, '最多保留 1 MiB，超出部分自动清理。');
     assert.equal(t.view.clearLogButtons.container.children[0], '清空日志');
     assert.equal(t.view.clearLogButtons.operation.children[0], '清空日志');
-    assert.equal(t.view.logPanel.children[0].children[0].children[0].children[0], '运行日志');
-    assert.equal(t.view.logPanel.children[1].children[0].children[0].children[0], '维护日志');
+    assert.equal(t.options._runtime_logs.renderWidget().children[0], t.view.clearLogButtons.container);
+    assert.equal(t.options._maintenance_logs.renderWidget().children[0], t.view.clearLogButtons.operation);
     assert.doesNotMatch(source, /刷新日志/);
     t.state.container_log = 'refreshed runtime log';
     t.state.output = 'refreshed maintenance log';
     await t.polls[0]();
-    assert.equal(t.view.logBoxes.container.textContent, 'refreshed runtime log');
-    assert.equal(t.view.logBoxes.operation.textContent, 'refreshed maintenance log');
+    assert.equal(t.view.logBoxes.container.value, 'refreshed runtime log');
+    assert.equal(t.view.logBoxes.operation.value, 'refreshed maintenance log');
     t.options.frontend_port.input = '3001';
     assert.notEqual(t.options.backend_port.validate('main', '3001'), true);
     assert.equal(t.options.backend_port.validate('main', '3000'), true);
@@ -134,7 +132,7 @@ test('unhealthy container is visible and completed work refreshes details', asyn
     t.state.health = 'unhealthy';
     await t.view.refresh('summary');
     assert.equal(t.view.status.textContent, 'sub-store 服务运行异常');
-    assert.match(t.view.status.className, /is-warning/);
+    assert.equal(t.view.status.className, undefined);
     t.state.busy = true;
     await t.view.refresh('summary');
     t.calls.length = 0;
@@ -298,14 +296,15 @@ test('XHR timeout keeps controls locked until polling confirms no task started',
 test('logs are displayed as text and stopped container hides open link', async () => {
     const t = setup(); t.state.container_log = '<script>unsafe</script>'; t.state.container = 'exited';
     await t.view.render(await t.view.load());
-    assert.equal(t.view.logBoxes.container.textContent, '<script>unsafe</script>');
+    assert.equal(t.view.logBoxes.container.value, '<script>unsafe</script>');
     assert.equal(t.view.open.hidden, true);
 });
 test('service diagnostics stay automatic without a manual log action', async () => {
     const t = setup(); await t.view.render(await t.view.load());
-    assert.equal(t.view.logPanel.children.length, 2);
-    assert.equal(t.view.logPanel.children[0].children[0].children[1].children[0], t.view.clearLogButtons.container);
-    assert.equal(t.view.logPanel.children[1].children[0].children[1].children[0], t.view.clearLogButtons.operation);
+    assert.equal(t.options._runtime_logs.label, '运行日志');
+    assert.equal(t.options._maintenance_logs.label, '维护日志');
+    assert.equal(t.options._runtime_logs.renderWidget().children[0], t.view.clearLogButtons.container);
+    assert.equal(t.options._maintenance_logs.renderWidget().children[0], t.view.clearLogButtons.operation);
     assert.doesNotMatch(source, /检查服务|action === 'check'/);
     const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');
     assert.doesNotMatch(controller, /^\s*check\)/m);
