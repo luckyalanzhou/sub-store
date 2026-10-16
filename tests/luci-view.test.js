@@ -45,7 +45,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     const t = setup(); const page = await t.view.render(await t.view.load());
     assert.equal(page.tag, 'form');
     assert.deepEqual(t.view.map.args, ['sub-store', 'sub-store', '管理 Docker 服务；订阅与配置在 Sub-Store 操作。']);
-    assert.deepEqual(t.view.map.tabs.map(tab => tab.name), ['overview', 'basic', 'advanced', 'logs', 'maintenance']);
+    assert.deepEqual(t.view.map.tabs.map(tab => tab.name), ['overview', 'basic', 'advanced', 'runtime-logs', 'maintenance-logs', 'maintenance']);
     for (const id of ['_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'])
         assert.equal(t.options[id].tab, 'overview');
     assert.equal(t.options.frontend_port.tab, 'basic');
@@ -85,8 +85,8 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBoxes.container.value, 'runtime log');
     assert.equal(t.view.logBoxes.operation.value, 'maintenance log');
-    assert.equal(t.options._runtime_logs.tab, 'logs');
-    assert.equal(t.options._maintenance_logs.tab, 'logs');
+    assert.equal(t.options._runtime_logs.tab, 'runtime-logs');
+    assert.equal(t.options._maintenance_logs.tab, 'maintenance-logs');
     assert.equal(t.options._runtime_logs.description, '最多保留 1 MiB，超出部分自动清理。');
     assert.equal(t.options._maintenance_logs.description, '最多保留 1 MiB，超出部分自动清理。');
     assert.equal(t.view.clearLogButtons.container.children[0], '清空日志');

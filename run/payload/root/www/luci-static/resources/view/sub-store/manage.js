@@ -356,7 +356,8 @@ return view.extend({
         s.tab('overview', '服务概览');
         s.tab('basic', '基本设置');
         s.tab('advanced', '高级设置');
-        s.tab('logs', '日志与诊断');
+        s.tab('runtime-logs', '运行日志');
+        s.tab('maintenance-logs', '维护日志');
         s.tab('maintenance', '更新维护');
         const display = (tab, id, label, node, description) => {
             const option = s.taboption(tab, form.DummyValue, id, label);
@@ -437,8 +438,8 @@ return view.extend({
         };
         const runtimeLogs = logSection('container', '运行日志', 'clear-runtime-logs');
         const maintenanceLogs = logSection('operation', '维护日志', 'clear-maintenance-logs');
-        display('logs', '_runtime_logs', '运行日志', runtimeLogs, '最多保留 1 MiB，超出部分自动清理。');
-        display('logs', '_maintenance_logs', '维护日志', maintenanceLogs, '最多保留 1 MiB，超出部分自动清理。');
+        display('runtime-logs', '_runtime_logs', '运行日志', runtimeLogs, '最多保留 1 MiB，超出部分自动清理。');
+        display('maintenance-logs', '_maintenance_logs', '维护日志', maintenanceLogs, '最多保留 1 MiB，超出部分自动清理。');
         display('advanced', '_api', '后端直连地址', this.api);
         display('advanced', '_storage', '实际数据存储路径', this.storage);
         const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
