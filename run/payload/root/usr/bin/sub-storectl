@@ -14,12 +14,16 @@ IPKG_INSTROOT="${IPKG_INSTROOT:-}"
 config_load sub-store
 config_get FRONTEND_PORT main frontend_port 3001
 config_get BACKEND_PORT main backend_port 3000
+config_get_bool BACKEND_LAN_ACCESS main backend_lan_access 0
 config_get ACCESS_HOST main access_host ""
 config_get PUBLIC_URL main public_url ""
 config_get API_PATH main api_path ""
 config_get SYNC_CRON main sync_cron "55 23 * * *"
+config_get IMAGE_REF main image_ref "xream/sub-store:latest"
 DATA_VOLUME=sub-store-data
 HEALTHCHECK=/usr/lib/sub-store/healthcheck.js
+APP_VERSION_CHECK=/usr/lib/sub-store/app-version.js
+RUN_IMAGE_REF="$IMAGE_REF"
 
 fail() {
     echo "sub-storectl: $*" >&2
@@ -35,6 +39,17 @@ assert_sub_store_container() {
     esac
 }
 
+assert_official_image_ref() {
+    case "$1" in
+        xream/sub-store@sha256:*|docker.io/xream/sub-store@sha256:*)
+            printf '%s\n' "$1" | grep -Eq '^(docker\.io/)?xream/sub-store@sha256:[0-9a-f]{64}$' ||
+                fail "invalid official image digest: $1"
+            ;;
+        xream/sub-store|xream/sub-store:*|docker.io/xream/sub-store|docker.io/xream/sub-store:*) ;;
+        *) fail "unsupported Docker image reference: $1" ;;
+    esac
+}
+
 valid_config() {
     case "$FRONTEND_PORT" in
         ''|*[!0-9]*) fail "frontend port must be an integer" ;;
@@ -45,6 +60,8 @@ valid_config() {
     esac
     [ "$BACKEND_PORT" -ge 1 ] && [ "$BACKEND_PORT" -le 65535 ] || fail "backend port must be between 1 and 65535"
     [ "$FRONTEND_PORT" -ne "$BACKEND_PORT" ] || fail "frontend and backend ports must be different"
+    case "$BACKEND_LAN_ACCESS" in 0|1) ;; *) fail "backend LAN access must be 0 or 1" ;; esac
+    assert_official_image_ref "$IMAGE_REF"
 
     case "$ACCESS_HOST" in
         '') ;;
@@ -139,7 +156,7 @@ copy_directory_to_volume() {
         "$VOLUME_PATH/"*) echo "legacy data directory is inside the Docker volume; refusing recursive copy" >&2; return 1 ;;
     esac
     volume_is_empty "$VOLUME_PATH" || { echo "Docker volume $DATA_VOLUME is not empty; refusing to overwrite existing data" >&2; return 1; }
-    if ! cp -R "$source_path"/. "$VOLUME_PATH"/; then
+    if ! cp -a "$source_path"/. "$VOLUME_PATH"/; then
         docker volume rm "$DATA_VOLUME" >/dev/null 2>&1 ||
             echo "WARNING: Could not remove the partial migration volume $DATA_VOLUME." >&2
         return 1
@@ -204,7 +221,9 @@ show_url() {
 
 show_api_url() {
     resolve_access_ports
-    printf 'http://%s:%s/%s\n' "$HOST" "$LINK_BACKEND_PORT" "$API_PATH"
+    api_host=127.0.0.1
+    [ "$BACKEND_LAN_ACCESS" = "1" ] && api_host="$HOST"
+    printf 'http://%s:%s/%s\n' "$api_host" "$LINK_BACKEND_PORT" "$API_PATH"
 }
 
 show_storage_path() {
@@ -250,11 +269,19 @@ container_matches_config() {
     [ "$(docker inspect -f '{{.State.Running}}' sub-store 2>/dev/null || true)" = "true" ] || return 1
     current_health="$(show_health)"
     [ "$current_health" = "healthy" ] || return 1
-    latest_id="$(docker image inspect -f '{{.Id}}' xream/sub-store:latest 2>/dev/null || true)"
+    latest_id="$(docker image inspect -f '{{.Id}}' "$RUN_IMAGE_REF" 2>/dev/null || true)"
     container_image_id="$(docker inspect -f '{{.Image}}' sub-store 2>/dev/null || true)"
     [ -n "$latest_id" ] && [ "$container_image_id" = "$latest_id" ] || return 1
     [ "$(docker port sub-store 3001/tcp 2>/dev/null | awk -F: 'NR == 1 {print $NF}')" = "$FRONTEND_PORT" ] || return 1
     [ "$(docker port sub-store 3000/tcp 2>/dev/null | awk -F: 'NR == 1 {print $NF}')" = "$BACKEND_PORT" ] || return 1
+    backend_host_ip="$(docker inspect -f '{{with (index .NetworkSettings.Ports "3000/tcp")}}{{(index . 0).HostIp}}{{end}}' sub-store 2>/dev/null || true)"
+    if [ "$BACKEND_LAN_ACCESS" = "1" ]; then
+        case "$backend_host_ip" in ''|0.0.0.0|::) ;; *) return 1 ;; esac
+    else
+        [ "$backend_host_ip" = "127.0.0.1" ] || return 1
+    fi
+    security_opts="$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' sub-store 2>/dev/null || true)"
+    case "$security_opts" in *no-new-privileges*) ;; *) return 1 ;; esac
     [ "$(container_env SUB_STORE_FRONTEND_BACKEND_PATH)" = "/$API_PATH" ] || return 1
     [ "$(container_env SUB_STORE_BACKEND_SYNC_CRON)" = "$SYNC_CRON" ] || return 1
     [ "$(container_env SUB_STORE_CORS_ALLOWED_ORIGINS)" = "$(frontend_cors_origins)" ] || return 1
@@ -311,11 +338,14 @@ check_storage_capacity() {
 }
 
 run_container() {
+    backend_publish="$BACKEND_PORT:3000"
+    [ "$BACKEND_LAN_ACCESS" = "1" ] || backend_publish="127.0.0.1:$BACKEND_PORT:3000"
     CONTAINER_ID="$(docker run -d \
         --name sub-store \
         --restart unless-stopped \
+        --security-opt no-new-privileges:true \
         -p "$FRONTEND_PORT:3001" \
-        -p "$BACKEND_PORT:3000" \
+        -p "$backend_publish" \
         -e TZ=Asia/Shanghai \
         -e SUB_STORE_FRONTEND_HOST=0.0.0.0 \
         -e SUB_STORE_FRONTEND_PORT=3001 \
@@ -335,7 +365,7 @@ run_container() {
         --health-retries 3 \
         --health-start-period 30s \
         -v "$DATA_VOLUME:/opt/app/data" \
-        xream/sub-store:latest)" || return 1
+        "$RUN_IMAGE_REF")" || return 1
     [ -n "$CONTAINER_ID" ] || return 1
 
     n=0
@@ -355,6 +385,37 @@ run_container() {
     docker exec -i sub-store node --input-type=commonjs - < "$HEALTHCHECK" >&2 2>/dev/null || true
     docker logs --tail 80 sub-store >&2 2>/dev/null || true
     return 1
+}
+
+resolve_official_digest() {
+    docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null |
+        grep -E '^(docker\.io/)?xream/sub-store@sha256:[0-9a-f]{64}$' | head -n 1
+}
+
+persist_running_image_ref() {
+    resolved_ref="$(resolve_official_digest "$RUN_IMAGE_REF")"
+    [ -n "$resolved_ref" ] || resolved_ref="$RUN_IMAGE_REF"
+    assert_official_image_ref "$resolved_ref"
+    current_ref="$(uci -q get sub-store.main.image_ref 2>/dev/null || true)"
+    if [ "$current_ref" != "$resolved_ref" ]; then
+        if ! uci set "sub-store.main.image_ref=$resolved_ref" || ! uci commit sub-store; then
+            uci -q revert sub-store.main.image_ref >/dev/null 2>&1 || true
+            echo "Could not persist the verified Docker image digest." >&2
+            return 1
+        fi
+        if ! chmod 600 "$CONFIG"; then
+            if [ -n "$current_ref" ]; then
+                uci set "sub-store.main.image_ref=$current_ref" >/dev/null 2>&1 || true
+            else
+                uci -q delete sub-store.main.image_ref >/dev/null 2>&1 || true
+            fi
+            uci commit sub-store >/dev/null 2>&1 || true
+            echo "Could not secure the configuration after saving the Docker image digest." >&2
+            return 1
+        fi
+    fi
+    IMAGE_REF="$resolved_ref"
+    RUN_IMAGE_REF="$resolved_ref"
 }
 
 restore_previous_settings() {
@@ -435,6 +496,7 @@ replace_container() {
     render_config
     daemon_ready
     ensure_data_volume
+    RUN_IMAGE_REF="$IMAGE_REF"
 
     HAD_OLD_CONTAINER=0
     OLD_WAS_RUNNING=0
@@ -543,10 +605,16 @@ replace_container() {
     check_port_conflicts
     check_storage_capacity
 
-    if [ "${1:-}" = "update" ] || ! docker image inspect xream/sub-store:latest >/dev/null 2>&1; then
-        if ! docker pull xream/sub-store:latest; then
+    if [ "${1:-}" = "update" ] || ! docker image inspect "$RUN_IMAGE_REF" >/dev/null 2>&1; then
+        pull_ref="$RUN_IMAGE_REF"
+        [ "${1:-}" = "update" ] && pull_ref=xream/sub-store:latest
+        if ! docker pull "$pull_ref"; then
             [ "$HAD_OLD_CONTAINER" = "1" ] && restore_previous_settings
             fail "could not pull the sub-store image; the running container was left unchanged"
+        fi
+        if [ "${1:-}" = "update" ]; then
+            RUN_IMAGE_REF="$(resolve_official_digest xream/sub-store:latest)"
+            [ -n "$RUN_IMAGE_REF" ] || RUN_IMAGE_REF=xream/sub-store:latest
         fi
     fi
 
@@ -557,6 +625,7 @@ replace_container() {
         fi
         if container_matches_config; then
             echo "Current container already uses the latest image; no rebuild is required."
+            persist_running_image_ref
             return 0
         fi
     fi
@@ -585,7 +654,7 @@ replace_container() {
 
         if [ -n "$COPY_SOURCE" ] && [ "$COPY_SOURCE" != "$VOLUME_PATH" ]; then
             VOLUME_MIGRATION_IN_PROGRESS=1
-            if ! cp -R "$COPY_SOURCE"/. "$VOLUME_PATH"/; then
+            if ! cp -a "$COPY_SOURCE"/. "$VOLUME_PATH"/; then
                 rollback_replacement
                 fail "could not copy existing data into Docker volume $DATA_VOLUME; the previous container was restored"
             fi
@@ -599,6 +668,10 @@ replace_container() {
     fi
 
     if run_container; then
+        if ! persist_running_image_ref; then
+            rollback_replacement
+            fail "new container was healthy, but its verified image digest could not be saved; the previous container was restored when available"
+        fi
         if [ "$HAD_OLD_CONTAINER" = "1" ]; then
             if ! docker rm "$BACKUP_NAME" >/dev/null 2>&1; then
                 echo "WARNING: New container is running, but the stopped rollback container $BACKUP_NAME could not be removed." >&2
@@ -665,6 +738,11 @@ wait_for_current_health() {
 }
 
 show_app_version() {
+    api_version="$(docker exec -i sub-store node --input-type=commonjs - < "$APP_VERSION_CHECK" 2>/dev/null || true)"
+    if printf '%s\n' "$api_version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+        printf '%s\n' "$api_version"
+        return 0
+    fi
     docker logs sub-store 2>&1 | awk '
         /Sub-Store -- v?[0-9]+\.[0-9]+\.[0-9]+/ {
             line = $0
@@ -726,7 +804,7 @@ uninstall_plugin() {
         echo "Preserved Docker volume $DATA_VOLUME."
     fi
     rm -f /etc/init.d/sub-store /usr/lib/sub-store/status /usr/lib/sub-store/job.sh \
-        /usr/lib/sub-store/healthcheck.js /usr/lib/sub-store/cron.sh /usr/lib/sub-store/permissions.sh \
+        /usr/lib/sub-store/healthcheck.js /usr/lib/sub-store/app-version.js /usr/lib/sub-store/cron.sh /usr/lib/sub-store/permissions.sh \
         /usr/share/rpcd/acl.d/luci-app-sub-store.json /usr/share/luci/menu.d/luci-app-sub-store.json \
         /www/luci-static/resources/view/sub-store/manage.js /etc/config/sub-store
     rm -rf /www/luci-static/resources/view/sub-store /etc/sub-store /tmp/sub-store-operation

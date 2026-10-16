@@ -12,12 +12,16 @@ render_config() { valid_config; }
 
 FRONTEND_PORT=3001
 BACKEND_PORT=3000
+BACKEND_LAN_ACCESS=1
 ACCESS_HOST=""
 PUBLIC_URL=""
 API_PATH=0123456789abcdef0123456789abcdef0123456789abcdef
 SYNC_CRON='55 23 * * *'
 DATA_VOLUME=sub-store-data
 HEALTHCHECK="$ROOT/run/payload/root/usr/lib/sub-store/healthcheck.js"
+APP_VERSION_CHECK="$ROOT/run/payload/root/usr/lib/sub-store/app-version.js"
+IMAGE_REF=xream/sub-store:latest
+RUN_IMAGE_REF="$IMAGE_REF"
 CONFIG="$TEST_DIR/sub-store.config"
 touch "$CONFIG"
 VOLUME_PATH="$TEST_DIR/volume"
@@ -77,6 +81,8 @@ docker() {
             target="$4"
             case "$template" in
                 *Config.Image*) echo xream/sub-store:latest ;;
+                *HostConfig.SecurityOpt*) echo '["no-new-privileges:true"]' ;;
+                *NetworkSettings.Ports*) echo 0.0.0.0 ;;
                 *State.Health*)
                     if [ -f "$TEST_DIR/health-starting" ]; then
                         health_checks="$(cat "$TEST_DIR/health-checks")"

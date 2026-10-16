@@ -52,4 +52,10 @@ calls = {}
 arg = { "logs" }
 dofile(root .. "/run/payload/root/usr/lib/sub-store/status")
 assert(snapshot.container_log == "test" and snapshot.output == "<script>log</script>")
+arg = { "runtime-log" }
+dofile(root .. "/run/payload/root/usr/lib/sub-store/status")
+assert(snapshot.container_log == "test" and snapshot.output == nil)
+arg = { "maintenance-log" }
+dofile(root .. "/run/payload/root/usr/lib/sub-store/status")
+assert(snapshot.output == "<script>log</script>" and snapshot.container_log == nil)
 print("LuCI snapshot, maintenance fast path and runtime diagnostics passed.")

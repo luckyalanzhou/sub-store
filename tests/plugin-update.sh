@@ -33,7 +33,7 @@ url=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --output) output="$2"; shift 2 ;;
-        -H|--connect-timeout|--max-time|--retry) shift 2 ;;
+        -H|--connect-timeout|--max-time|--retry|--proto|--proto-redir) shift 2 ;;
         --fail|--silent|--show-error|--location) shift ;;
         *) url="$1"; shift ;;
     esac

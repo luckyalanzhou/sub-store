@@ -11,12 +11,16 @@ awk '/^fail\(\) \{/ {copy=1} /^ACTION=/ {exit} copy {print}' "$CTL" > "$TEST_DIR
 
 FRONTEND_PORT=8081
 BACKEND_PORT=8080
+BACKEND_LAN_ACCESS=1
 ACCESS_HOST=sub.example.test
 PUBLIC_URL=""
 API_PATH=0123456789abcdef0123456789abcdef0123456789abcdef
 SYNC_CRON='55 23 * * *'
 DATA_VOLUME=sub-store-data
 HEALTHCHECK="$ROOT/run/payload/root/usr/lib/sub-store/healthcheck.js"
+APP_VERSION_CHECK="$ROOT/run/payload/root/usr/lib/sub-store/app-version.js"
+IMAGE_REF=xream/sub-store:latest
+RUN_IMAGE_REF="$IMAGE_REF"
 MOCK_VOLUME_PATH="$TEST_DIR/docker-root/volumes/$DATA_VOLUME/_data"
 MOCK_CONTAINER=0
 MOCK_MERGE=""
@@ -29,6 +33,7 @@ DOCKER_LOG="$TEST_DIR/docker-log"
 MOCK_APP_LOGS="$TEST_DIR/app.log"
 MOCK_LOG_DRIVER=json-file
 MOCK_LOG_PATH="$TEST_DIR/sub-store-runtime.log"
+MOCK_REPO_DIGEST=""
 
 uci() {
     case "$*" in
@@ -41,6 +46,20 @@ docker() {
     printf '%s\n' "$*" >> "$DOCKER_LOG"
     case "$1" in
         info) return 0 ;;
+        image)
+            case "$2" in
+                inspect)
+                    case "$3" in
+                        -f)
+                            case "$4" in
+                                *RepoDigests*) [ -z "$MOCK_REPO_DIGEST" ] || printf '%s\n' "$MOCK_REPO_DIGEST" ;;
+                                *Id*) printf '%s\n' mock-image-id ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
         volume)
             case "$2" in
                 inspect)
@@ -92,6 +111,14 @@ startup output
 Sub-Store -- v2.42.4
 EOF
 [ "$(show_app_version)" = "2.42.4" ]
+MOCK_REPO_DIGEST="xream/sub-store@sha256:$(printf 'a%.0s' $(seq 1 64))"
+[ "$(resolve_official_digest xream/sub-store:latest)" = "$MOCK_REPO_DIGEST" ]
+assert_official_image_ref "$MOCK_REPO_DIGEST"
+if (assert_official_image_ref 'xream/sub-store@sha256:bad') >/dev/null 2>&1; then
+    echo 'An invalid official image digest was accepted.' >&2
+    exit 1
+fi
+MOCK_REPO_DIGEST=""
 
 valid_config
 if (BACKEND_PORT=8081; valid_config) >/dev/null 2>&1; then
@@ -127,6 +154,7 @@ ensure_data_volume
 run_container
 grep -Fxq '8081:3001' "$DOCKER_ARGS"
 grep -Fxq '8080:3000' "$DOCKER_ARGS"
+grep -Fxq 'no-new-privileges:true' "$DOCKER_ARGS"
 grep -Fxq 'SUB_STORE_BACKEND_MERGE=' "$DOCKER_ARGS"
 grep -Fxq 'sub-store-data:/opt/app/data' "$DOCKER_ARGS"
 grep -Fxq 'json-file' "$DOCKER_ARGS"
@@ -135,6 +163,11 @@ grep -Fxq 'max-file=1' "$DOCKER_ARGS"
 grep -Fxq '60s' "$DOCKER_ARGS"
 grep -Fxq '30s' "$DOCKER_ARGS"
 grep -Fq 'http://sub.example.test:8081' "$DOCKER_ARGS"
+BACKEND_LAN_ACCESS=0
+[ "$(show_api_url)" = "http://127.0.0.1:8080/$API_PATH" ]
+run_container
+grep -Fxq '127.0.0.1:8080:3000' "$DOCKER_ARGS"
+BACKEND_LAN_ACCESS=1
 
 mkdir -p "$TEST_DIR/operation/lock"
 printf '%s\n' clear-runtime-logs > "$TEST_DIR/operation/action"

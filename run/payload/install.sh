@@ -9,6 +9,8 @@ INSTALL_OK=0
 PLUGIN_BACKUP_DIR=""
 PLUGIN_UPDATE_ACTIVE=0
 PLUGIN_TARGET_PREFIX=""
+FULL_INSTALL_ACTIVE=0
+SERVICE_WAS_ENABLED=0
 : > "$LOG"
 chmod 600 "$LOG"
 PACKAGE_VERSION=dev
@@ -73,9 +75,48 @@ rollback_plugin_update() {
     say "LuCI 插件文件已恢复到更新前状态。"
 }
 
+prepare_plugin_rollback() {
+    PLUGIN_BACKUP_DIR="$(umask 077; mktemp -d /tmp/sub-store-plugin-rollback.XXXXXX)"
+    [ -n "$PLUGIN_BACKUP_DIR" ] && [ -d "$PLUGIN_BACKUP_DIR" ] || fail "Cannot create a temporary rollback directory."
+    : > "$PLUGIN_BACKUP_DIR/states"
+    (cd "$PACKAGE_DIR/root" && find . -type f -print) > "$PLUGIN_BACKUP_DIR/manifest" ||
+        fail "Cannot list plugin package files for rollback protection."
+    printf '%s\n' \
+        ./etc/config/sub-store \
+        ./etc/sub-store/installed \
+        ./etc/sub-store/version \
+        ./usr/lib/lua/luci/controller/sub_store.lua \
+        ./usr/lib/lua/luci/model/cbi/sub_store.lua \
+        ./usr/lib/sub-store/check-update >> "$PLUGIN_BACKUP_DIR/manifest"
+    sort -u "$PLUGIN_BACKUP_DIR/manifest" -o "$PLUGIN_BACKUP_DIR/manifest"
+    while IFS= read -r package_path; do
+        relative_path="${package_path#./}"
+        target_path="$(plugin_target_path "$relative_path")"
+        if [ -f "$target_path" ]; then
+            mkdir -p "$PLUGIN_BACKUP_DIR/files/$(dirname "$relative_path")" ||
+                fail "Cannot prepare rollback storage for $relative_path."
+            cp -p "$target_path" "$PLUGIN_BACKUP_DIR/files/$relative_path" ||
+                fail "Cannot back up the current $relative_path before updating."
+            printf 'present %s\n' "$relative_path" >> "$PLUGIN_BACKUP_DIR/states"
+        else
+            printf 'absent %s\n' "$relative_path" >> "$PLUGIN_BACKUP_DIR/states"
+        fi
+    done < "$PLUGIN_BACKUP_DIR/manifest"
+    PLUGIN_UPDATE_ACTIVE=1
+}
+
+commit_plugin_update() {
+    rm -rf "$PLUGIN_BACKUP_DIR"
+    PLUGIN_BACKUP_DIR=""
+    PLUGIN_UPDATE_ACTIVE=0
+}
+
 finish() {
     result=$?
     if [ "$INSTALL_OK" != "1" ]; then
+        if [ "$FULL_INSTALL_ACTIVE" = "1" ] && [ "$SERVICE_WAS_ENABLED" = "0" ] && [ -x /etc/init.d/sub-store ]; then
+            /etc/init.d/sub-store disable >/dev/null 2>&1 || true
+        fi
         rollback_plugin_update || true
         say "安装未完成，阶段：$INSTALL_STEP；退出码：$result"
         say "安装阶段日志：$LOG。修复原因后可以重新上传安装包重试。"
@@ -125,29 +166,7 @@ fi
 
 if [ "$PLUGIN_ONLY" = "1" ]; then
     step 2 "只更新 LuCI 插件"
-    PLUGIN_BACKUP_DIR="$(umask 077; mktemp -d /tmp/sub-store-plugin-rollback.XXXXXX)"
-    [ -n "$PLUGIN_BACKUP_DIR" ] && [ -d "$PLUGIN_BACKUP_DIR" ] || fail "Cannot create a temporary rollback directory."
-    : > "$PLUGIN_BACKUP_DIR/states"
-    (cd "$PACKAGE_DIR/root" && find . -type f -print) > "$PLUGIN_BACKUP_DIR/manifest" ||
-        fail "Cannot list plugin package files for rollback protection."
-    printf '%s\n' \
-        ./usr/lib/lua/luci/controller/sub_store.lua \
-        ./usr/lib/lua/luci/model/cbi/sub_store.lua \
-        ./usr/lib/sub-store/check-update >> "$PLUGIN_BACKUP_DIR/manifest"
-    while IFS= read -r package_path; do
-        relative_path="${package_path#./}"
-        target_path="$(plugin_target_path "$relative_path")"
-        if [ -f "$target_path" ]; then
-            mkdir -p "$PLUGIN_BACKUP_DIR/files/$(dirname "$relative_path")" ||
-                fail "Cannot prepare rollback storage for $relative_path."
-            cp -p "$target_path" "$PLUGIN_BACKUP_DIR/files/$relative_path" ||
-                fail "Cannot back up the current $relative_path before updating."
-            printf 'present %s\n' "$relative_path" >> "$PLUGIN_BACKUP_DIR/states"
-        else
-            printf 'absent %s\n' "$relative_path" >> "$PLUGIN_BACKUP_DIR/states"
-        fi
-    done < "$PLUGIN_BACKUP_DIR/manifest"
-    PLUGIN_UPDATE_ACTIVE=1
+    prepare_plugin_rollback
 
     RUNNING_DIR="$PLUGIN_BACKUP_DIR/running"
     mkdir -p "$RUNNING_DIR/usr/bin" "$RUNNING_DIR/usr/lib/sub-store"
@@ -166,8 +185,23 @@ if [ "$PLUGIN_ONLY" = "1" ]; then
     sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
     chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
         /usr/lib/sub-store/plugin-update /etc/init.d/sub-store
+    chmod 644 /usr/lib/sub-store/app-version.js
     rm -f /usr/lib/lua/luci/controller/sub_store.lua /usr/lib/lua/luci/model/cbi/sub_store.lua \
         /usr/lib/sub-store/check-update
+    if command -v uci >/dev/null 2>&1 && ! uci -q get sub-store.main.backend_lan_access >/dev/null 2>&1; then
+        BACKEND_LAN_DEFAULT=0
+        if command -v docker >/dev/null 2>&1 && docker inspect sub-store >/dev/null 2>&1; then
+            CURRENT_MERGE="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' sub-store 2>/dev/null \
+                | sed -n 's/^SUB_STORE_BACKEND_MERGE=//p' | head -n 1)"
+            CURRENT_BACKEND_HOST="$(docker inspect -f '{{with (index .NetworkSettings.Ports "3000/tcp")}}{{(index . 0).HostIp}}{{end}}' sub-store 2>/dev/null || true)"
+            if [ -z "$CURRENT_MERGE" ]; then
+                case "$CURRENT_BACKEND_HOST" in 127.0.0.1|::1) ;; *) BACKEND_LAN_DEFAULT=1 ;; esac
+            fi
+        fi
+        uci set "sub-store.main.backend_lan_access=$BACKEND_LAN_DEFAULT"
+        uci commit sub-store
+        chmod 600 /etc/config/sub-store
+    fi
     mkdir -p /etc/sub-store
     printf '%s\n' "$PACKAGE_VERSION" >/etc/sub-store/version
     chmod 644 /etc/sub-store/version
@@ -175,9 +209,7 @@ if [ "$PLUGIN_ONLY" = "1" ]; then
     rm -rf /tmp/luci-modulecache
     [ ! -x /etc/init.d/rpcd ] || /etc/init.d/rpcd reload
     say "LuCI plugin updated to $PACKAGE_VERSION. The Docker image, container, and data were not changed."
-    rm -rf "$PLUGIN_BACKUP_DIR"
-    PLUGIN_BACKUP_DIR=""
-    PLUGIN_UPDATE_ACTIVE=0
+    commit_plugin_update
     INSTALL_OK=1
     exit 0
 fi
@@ -199,6 +231,7 @@ OLD_IMAGE=""
 OLD_API_PATH=""
 OLD_FRONTEND_PORT=""
 OLD_BACKEND_PORT=""
+OLD_BACKEND_HOST=""
 OLD_MERGE=""
 if docker inspect sub-store >/dev/null 2>&1; then
     EXISTING=1
@@ -214,6 +247,7 @@ if docker inspect sub-store >/dev/null 2>&1; then
     OLD_API_PATH="${OLD_API_PATH%/}"
     OLD_FRONTEND_PORT="$(docker port sub-store 3001/tcp 2>/dev/null | awk -F: 'NR == 1 {print $NF}')"
     OLD_BACKEND_PORT="$(docker port sub-store 3000/tcp 2>/dev/null | awk -F: 'NR == 1 {print $NF}')"
+    OLD_BACKEND_HOST="$(docker inspect -f '{{with (index .NetworkSettings.Ports "3000/tcp")}}{{(index . 0).HostIp}}{{end}}' sub-store 2>/dev/null || true)"
     OLD_MERGE="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' sub-store \
         | sed -n 's/^SUB_STORE_BACKEND_MERGE=//p' | head -n 1)"
     if [ -n "$OLD_MERGE" ]; then
@@ -227,11 +261,15 @@ if docker inspect sub-store >/dev/null 2>&1; then
 fi
 
 step 4 "安装管理界面并准备配置"
+[ -e /etc/rc.d/S99sub-store ] && SERVICE_WAS_ENABLED=1
+FULL_INSTALL_ACTIVE=1
+prepare_plugin_rollback
 (umask 022; cp -R "$PACKAGE_DIR/root/." /)
 . /usr/lib/sub-store/permissions.sh
 sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
 chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
     /usr/lib/sub-store/plugin-update /etc/init.d/sub-store
+chmod 644 /usr/lib/sub-store/app-version.js
 # Remove only the obsolete files shipped by this package.
 rm -f /usr/lib/lua/luci/controller/sub_store.lua /usr/lib/lua/luci/model/cbi/sub_store.lua /usr/lib/sub-store/check-update
 rm -f /tmp/luci-indexcache*
@@ -271,6 +309,13 @@ if [ "$(uci -q get sub-store.main.frontend_port)" = "3000" ]; then
     BACKEND_DEFAULT=3002
 fi
 initialize_port backend_port "$BACKEND_DEFAULT" "$OLD_BACKEND_PORT"
+if ! uci -q get sub-store.main.backend_lan_access >/dev/null 2>&1; then
+    BACKEND_LAN_DEFAULT=0
+    if [ "$EXISTING" = "1" ] && [ -z "$OLD_MERGE" ]; then
+        case "$OLD_BACKEND_HOST" in 127.0.0.1|::1) ;; *) BACKEND_LAN_DEFAULT=1 ;; esac
+    fi
+    uci set "sub-store.main.backend_lan_access=$BACKEND_LAN_DEFAULT"
+fi
 uci -q get sub-store.main.sync_cron >/dev/null 2>&1 || uci set sub-store.main.sync_cron='55 23 * * *'
 uci -q delete sub-store.main.log_max_size_mb >/dev/null 2>&1 || true
 uci -q delete sub-store.main.log_max_files >/dev/null 2>&1 || true
@@ -347,6 +392,13 @@ chmod 600 /etc/config/sub-store
 step 6 "完成安装并输出访问入口"
 printf '%s\n' "$PACKAGE_VERSION" >/etc/sub-store/version
 chmod 644 /etc/sub-store/version
+
+# The managed container, UCI settings, plugin files, and package version now
+# describe the same successful installation. Later cache refreshes are not part
+# of the rollback boundary because the previous container has already been
+# retired by sub-storectl.
+commit_plugin_update
+FULL_INSTALL_ACTIVE=0
 
 rm -f /tmp/luci-indexcache
 rm -f /tmp/luci-indexcache.*

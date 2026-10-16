@@ -233,10 +233,11 @@ return view.extend({
     },
     refreshLogs: async function() {
         if (!this.logBoxes) return;
-        const boxes = Object.values(this.logBoxes);
-        if (boxes.length && boxes.every(box => 'offsetParent' in box && box.offsetParent === null)) return;
+        const visible = Object.entries(this.logBoxes).find(entry =>
+            !('offsetParent' in entry[1]) || entry[1].offsetParent !== null);
+        if (!visible) return;
         try {
-            const logs = await this.snapshot('logs');
+            const logs = await this.snapshot(visible[0] === 'container' ? 'runtime-log' : 'maintenance-log');
             this.state = Object.assign(this.state || {}, logs);
             this.paintLog();
         } catch (error) {}
@@ -399,7 +400,10 @@ return view.extend({
         o = s.taboption('advanced', form.Value, 'backend_port', '后端 API 端口');
         o.datatype = 'port'; o.rmempty = false; o.default = '3000';
         o.validate = function(section, value) { return +value !== +frontend.formvalue(section) || '前后端端口不能相同。'; };
-        o.description = '仅供后端直连，普通用户保持默认。';
+        o.description = '仅供路由器本机或明确启用的局域网直连，普通用户保持默认。';
+        o = s.taboption('advanced', form.Flag, 'backend_lan_access', '允许局域网直连后端');
+        o.default = '0'; o.rmempty = false;
+        o.description = '默认关闭；管理页面仍通过前端端口访问 API。';
         o = s.taboption('advanced', form.Value, 'api_path', 'API 随机路径');
         o.password = true; o.rmempty = false;
         o.description = '后端访问密钥，已包含在管理地址中，请勿公开。';
@@ -457,9 +461,15 @@ return view.extend({
         display('maintenance', '_rotate', 'API 密钥', rotate, '重新生成后，旧管理地址立即失效。');
         const formNode = await m.render();
         this.paint();
+        this.pollCycle = 0;
         poll.add(async () => {
-            await this.refresh('summary');
-            await this.refreshLogs();
+            if (typeof document !== 'undefined' && document.hidden) return;
+            this.pollCycle += 1;
+            const logVisible = this.logBoxes && Object.values(this.logBoxes).some(box =>
+                !('offsetParent' in box) || box.offsetParent !== null);
+            const fast = this.localBusy || (this.state && this.state.busy) || this.enqueuePendingAction || logVisible;
+            if (fast || this.pollCycle % 3 === 0) await this.refresh('summary');
+            if (logVisible) await this.refreshLogs();
         }, 5);
         return formNode;
     }

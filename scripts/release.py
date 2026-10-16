@@ -170,6 +170,12 @@ def pending_candidates(
     return sorted(candidates.values(), key=lambda state: state["parts"])
 
 
+def resumable_candidates(
+    candidates: list[dict[str, Any]], latest_complete: tuple[int, int, int]
+) -> list[dict[str, Any]]:
+    return [candidate for candidate in candidates if candidate["parts"] > latest_complete]
+
+
 def release_commit(repo: str, tag: str) -> str:
     return command(["gh", "api", f"repos/{repo}/commits/{tag}", "--jq", ".sha"])
 
@@ -290,15 +296,19 @@ def prepare() -> None:
         return
 
     candidates = pending_candidates(states, tag_names, release_tags)
+    complete_states = [state for state in states if state["complete"]]
+    latest = max((state["parts"] for state in complete_states), default=(0, 0, 0))
+    resumable = resumable_candidates(candidates, latest)
     if same_run:
         selected = same_run[0]
         selected_tag = selected["tag"]
-    elif candidates:
-        selected = candidates[0]
+    elif len(resumable) == 1:
+        selected = resumable[0]
         selected_tag = selected["tag"]
+    elif len(resumable) > 1:
+        tags = ", ".join(candidate["tag"] for candidate in resumable)
+        raise ReleaseError(f"Multiple unfinished releases require manual cleanup: {tags}")
     else:
-        complete_states = [state for state in states if state["complete"]]
-        latest = max((state["parts"] for state in complete_states), default=(0, 0, 0))
         current = format_version(latest)
         version = next_version(current, env["BUMP_TYPE"])
         selected_tag = f"v{version}"

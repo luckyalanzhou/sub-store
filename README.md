@@ -9,7 +9,7 @@
 ## 功能
 
 - 在 LuCI 中启动、停止和重启 Sub-Store 服务。
-- 配置前端、后端端口、管理地址和 API 随机路径。
+- 配置前端、后端端口、管理地址和 API 随机路径；新安装默认只允许路由器本机直连后端。
 - 查看并分别清理运行日志、维护日志；每类日志最多保留 1 MiB。
 - 一键检查并更新 LuCI 插件和官方 Docker 镜像，数据卷保持不变。
 - 使用 Docker 命名卷保存数据，存储位置跟随设备的 Docker Root Dir。
@@ -18,7 +18,7 @@
 
 从 [Releases](https://github.com/luckyalanzhou/sub-store/releases) 下载 `.run` 自解压安装器，在 **iStore → 手动安装**上传并安装。安装器面向 iStoreOS 24.10.x（opkg 系统）。首次启动需要联网安装 Docker 依赖并拉取官方镜像。
 
-`.sha256` 不影响手动安装，但 Release 校验和 LuCI 插件自动更新需要它，请保留。它用于校验文件完整性，不是发布者签名。
+Release 同时提供 `.sha256` 校验文件，可用于手动验证下载完整性；LuCI 自动更新会自行下载该文件。SHA-256 不是发布者签名。
 
 ## 快速使用
 
@@ -32,7 +32,7 @@ sub-storectl url
 sub-storectl logs
 ```
 
-在 **更新维护 → 检查更新** 中检查插件和 Docker 镜像。详细配置、远程访问、数据导出及故障排查见[使用笔记](docs/使用笔记.md)。
+在 **更新维护 → 检查更新** 中更新插件和 Docker 镜像。详细配置、远程访问、数据导出及故障排查见[使用笔记](docs/使用笔记.md)。
 
 ## 版本与维护
 
@@ -42,4 +42,4 @@ sub-storectl logs
 
 ## 开源协议
 
-仓库当前没有 `LICENSE` 文件，尚未声明授权条款。
+本项目使用 [MIT License](LICENSE)。

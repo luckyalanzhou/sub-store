@@ -9,7 +9,16 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from release import body_with_run_id, get_release_by_tag, pending_candidates, prepare, publish, verify_files  # noqa: E402
+from release import (  # noqa: E402
+    ReleaseError,
+    body_with_run_id,
+    get_release_by_tag,
+    pending_candidates,
+    prepare,
+    publish,
+    resumable_candidates,
+    verify_files,
+)
 from release_version import next_version, parse_tag, parse_version  # noqa: E402
 
 
@@ -60,6 +69,36 @@ class ReleaseVersionTests(unittest.TestCase):
         ]
         candidates = pending_candidates(releases, {"v0.0.3", "v0.0.5", "v0.0.0"}, {"v0.0.2", "v0.0.3", "v0.0.4"})
         self.assertEqual([state["tag"] for state in candidates], ["v0.0.3", "v0.0.4", "v0.0.5"])
+
+    def test_only_unfinished_versions_after_latest_complete_are_resumable(self):
+        candidates = [
+            {"tag": "v0.0.9", "parts": (0, 0, 9)},
+            {"tag": "v0.0.22", "parts": (0, 0, 22)},
+        ]
+        self.assertEqual(
+            [candidate["tag"] for candidate in resumable_candidates(candidates, (0, 0, 21))],
+            ["v0.0.22"],
+        )
+
+    def test_prepare_rejects_multiple_newer_unfinished_versions(self):
+        drafts = [
+            {"tag_name": "v0.0.3", "draft": True, "body": "", "assets": []},
+            {"tag_name": "v0.0.4", "draft": True, "body": "", "assets": []},
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            env = {
+                "GH_TOKEN": "test-token",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_REF": "refs/heads/main",
+                "GITHUB_SHA": "source-sha",
+                "GITHUB_RUN_ID": "100",
+                "GITHUB_OUTPUT": str(Path(temp) / "github-output"),
+                "BUMP_TYPE": "patch",
+            }
+            with patch.dict(os.environ, env), \
+                 patch("release.list_api_pages", side_effect=[drafts, []]), \
+                 self.assertRaisesRegex(ReleaseError, "Multiple unfinished releases"):
+                prepare()
 
     def test_run_marker_is_preserved_and_deduplicated(self):
         body, ids = body_with_run_id("Notes\n\n<!-- sub-store-run-ids: 10,11 -->", "11")

@@ -7,6 +7,8 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 awk '
     /^plugin_target_path\(\) \{/ { copy=1 }
     /^rollback_plugin_update\(\) \{/ { copy=1 }
+    /^prepare_plugin_rollback\(\) \{/ { copy=1 }
+    /^commit_plugin_update\(\) \{/ { copy=1 }
     copy { print }
     copy && /^\}$/ { copy=0 }
 ' "$ROOT/run/payload/install.sh" > "$TEST_DIR/functions.sh"
@@ -42,4 +44,25 @@ if rollback_plugin_update; then
 fi
 [ -d "$PLUGIN_BACKUP_DIR" ]
 [ "$PLUGIN_UPDATE_ACTIVE" = 1 ]
+
+PACKAGE_DIR="$TEST_DIR/package"
+PLUGIN_TARGET_PREFIX="$TEST_DIR/transaction-root"
+PLUGIN_BACKUP_DIR=""
+PLUGIN_UPDATE_ACTIVE=0
+mkdir -p "$PACKAGE_DIR/root/usr/bin" "$PLUGIN_TARGET_PREFIX/usr/bin" \
+    "$PLUGIN_TARGET_PREFIX/etc/config" "$PLUGIN_TARGET_PREFIX/etc/sub-store"
+printf '%s\n' packaged > "$PACKAGE_DIR/root/usr/bin/sub-storectl"
+printf '%s\n' old-command > "$PLUGIN_TARGET_PREFIX/usr/bin/sub-storectl"
+printf '%s\n' old-config > "$PLUGIN_TARGET_PREFIX/etc/config/sub-store"
+printf '%s\n' old-version > "$PLUGIN_TARGET_PREFIX/etc/sub-store/version"
+prepare_plugin_rollback
+printf '%s\n' new-command > "$PLUGIN_TARGET_PREFIX/usr/bin/sub-storectl"
+printf '%s\n' new-config > "$PLUGIN_TARGET_PREFIX/etc/config/sub-store"
+printf '%s\n' new-version > "$PLUGIN_TARGET_PREFIX/etc/sub-store/version"
+printf '%s\n' marker > "$PLUGIN_TARGET_PREFIX/etc/sub-store/installed"
+rollback_plugin_update
+[ "$(cat "$PLUGIN_TARGET_PREFIX/usr/bin/sub-storectl")" = old-command ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/etc/config/sub-store")" = old-config ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/etc/sub-store/version")" = old-version ]
+[ ! -e "$PLUGIN_TARGET_PREFIX/etc/sub-store/installed" ]
 echo 'Plugin update rollback and recovery retention checks passed.'

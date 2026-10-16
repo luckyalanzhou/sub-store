@@ -1,4 +1,6 @@
 * text=auto
+.gitattributes text eol=lf
+.gitignore text eol=lf
 *.sh text eol=lf
 *.lua text eol=lf
 *.yml text eol=lf
@@ -8,5 +10,7 @@ run/payload/root/usr/bin/sub-storectl text eol=lf
 
 *.js text eol=lf
 *.json text eol=lf
+*.py text eol=lf
+LICENSE text eol=lf
 run/payload/root/usr/lib/sub-store/status text eol=lf
 run/payload/root/usr/lib/sub-store/plugin-update text eol=lf

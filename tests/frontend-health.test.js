@@ -96,6 +96,25 @@ async function runStdin(config) {
     });
 }
 
+async function runVersion(config) {
+    const port = new URL(config.frontend).port;
+    return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['--input-type=commonjs', '-'], {
+            env: {
+                ...process.env,
+                SUB_STORE_FRONTEND_PORT: port,
+                SUB_STORE_FRONTEND_BACKEND_PATH: config.prefix,
+            },
+        });
+        let output = '';
+        child.stdout.on('data', data => { output += data; });
+        child.stderr.on('data', data => { output += data; });
+        child.on('error', reject);
+        child.on('close', code => resolve({ code, output }));
+        child.stdin.end(fs.readFileSync(require.resolve('../run/payload/root/usr/lib/sub-store/app-version.js')));
+    });
+}
+
 test('executes health checks through the stdin invocation used by Docker', async t => {
     const result = await runStdin(await fixture(t));
     assert.equal(result.code, 0, result.output);
@@ -107,4 +126,22 @@ test('stdin health checks fail when the frontend entrypoint is broken', async t 
     const result = await runStdin(config);
     assert.equal(result.code, 1, result.output);
     assert.match(result.output, /script.*HTTP 404/);
+});
+
+test('reads the Sub-Store version from the environment API', async t => {
+    const config = await fixture(t, {
+        '/test-prefix/api/utils/env': [200, 'application/json', '{"status":"success","data":{"version":"2.42.4"}}'],
+    });
+    const result = await runVersion(config);
+    assert.equal(result.code, 0, result.output);
+    assert.equal(result.output.trim(), '2.42.4');
+});
+
+test('rejects an invalid environment API version', async t => {
+    const config = await fixture(t, {
+        '/test-prefix/api/utils/env': [200, 'application/json', '{"status":"success","data":{"version":"latest"}}'],
+    });
+    const result = await runVersion(config);
+    assert.equal(result.code, 1, result.output);
+    assert.equal(result.output, '');
 });

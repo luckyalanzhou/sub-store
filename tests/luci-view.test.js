@@ -54,6 +54,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.options.log_max_size_mb, undefined);
     assert.equal(t.options.log_max_files, undefined);
     assert.equal(t.options.api_path.password, true);
+    assert.equal(t.options.backend_lan_access.default, '0');
     assert.equal(t.polls.length, 1);
     assert.equal(t.view.open.href, t.state.url);
     assert.equal(t.view.open.children[0], '打开 sub-store');
@@ -108,6 +109,8 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.options.public_url.validate('main', 'https://sub.example.test'), true);
     assert.notEqual(t.options.public_url.validate('main', 'https://bad..example.test'), true);
     assert.match(source, /检查插件与官方镜像/);
+    assert.match(source, /document\.hidden/);
+    assert.match(source, /runtime-log.*maintenance-log/s);
 });
 test('service actions follow the current container state', async () => {
     const t = setup(); await t.view.render(await t.view.load());
