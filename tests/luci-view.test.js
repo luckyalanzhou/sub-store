@@ -7,7 +7,8 @@ function setup() {
     const state = { container: 'running', health: 'healthy', url: 'http://router.test:3001/?api=x', busy: false, version: 'test',
         app_version: '2.42.3', created: '2026-10-13T00:00:00Z', output: 'maintenance log', container_log: 'runtime log',
         storage: '/mnt/docker/volumes/sub-store-data/_data', plugin_latest_version: '', plugin_update_available: false };
-    const E = (tag, attrs = {}, children = []) => ({ tag, ...attrs, children, textContent: '', value: '', focus() {}, select() {} });
+    const E = (tag, attrs = {}, children = []) => ({ tag, ...attrs, children, textContent: '', value: '', focus() {}, select() {},
+        setAttribute(name, value) { this[name] = value; } });
     const ui = { createHandlerFn: (ctx, fn) => function(...args) {
         if (global.window && global.window.requireCurrentTarget && !args.some(arg => arg && arg.currentTarget))
             throw new TypeError('event.currentTarget is required');
@@ -102,14 +103,24 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBoxes.container.value, 'runtime log');
     assert.equal(t.view.logBoxes.operation.value, 'maintenance log');
+    assert.equal(t.view.logBoxes.container.cols, 120);
     assert.equal(t.options._logs.tab, 'logs');
-    assert.equal(t.options._logs.description, '每类日志最多保留 1 MiB，超出部分自动清理。');
+    assert.equal(t.options._logs.label, '日志');
+    assert.equal(t.options._logs.description, undefined);
     assert.equal(t.view.clearLogButtons.container.children[0], '清空日志');
     assert.equal(t.view.clearLogButtons.operation.children[0], '清空日志');
+    assert.deepEqual(t.view.logTabMenu.children.map(item => item.children[0].children[0]), ['运行日志', '维护日志']);
+    assert.equal(t.view.logTabMenu.style, 'display:flex;flex-wrap:wrap;width:100%;margin:0;padding:0');
     assert.equal(t.options._logs.renderWidget().children[0], t.view.logPanes[0]);
-    assert.deepEqual(t.view.logPanes.map(pane => pane['data-tab-title']), ['运行日志', '维护日志']);
-    assert.equal(t.view.logPanes[0].children[0].children[0], t.view.clearLogButtons.container);
-    assert.equal(t.view.logPanes[1].children[0].children[0], t.view.clearLogButtons.operation);
+    assert.equal(t.view.logPanes[0].children[0], t.view.clearLogButtons.container);
+    assert.equal(t.view.logPanes[1].children[0], t.view.clearLogButtons.operation);
+    assert.equal(t.view.logPanes[0].hidden, undefined);
+    assert.equal(t.view.logPanes[1].hidden, true);
+    t.view.logTabItems[1].children[0].click({ preventDefault() {} });
+    assert.equal(t.view.logPanes[0].hidden, true);
+    assert.equal(t.view.logPanes[1].hidden, false);
+    assert.equal(t.view.logTabItems[1].className, 'cbi-tab');
+    assert.equal(t.view.logTabItems[1].children[0]['aria-selected'], 'true');
     assert.doesNotMatch(source, /刷新日志/);
     t.state.container_log = 'refreshed runtime log';
     t.state.output = 'refreshed maintenance log';
@@ -320,11 +331,8 @@ test('logs are displayed as text and stopped container hides open link', async (
 });
 test('service diagnostics stay automatic without a manual log action', async () => {
     const t = setup(); await t.view.render(await t.view.load());
-    assert.equal(t.options._logs.label, '日志');
-    assert.deepEqual(t.view.logPanes.map(pane => pane['data-tab-title']), ['运行日志', '维护日志']);
+    assert.deepEqual(t.view.logTabMenu.children.map(item => item.children[0].children[0]), ['运行日志', '维护日志']);
     assert.equal(t.options._logs.renderWidget().children[0], t.view.logPanes[0]);
-    assert.equal(t.view.logPanes[0].children[0].children[0], t.view.clearLogButtons.container);
-    assert.equal(t.view.logPanes[1].children[0].children[0], t.view.clearLogButtons.operation);
     assert.doesNotMatch(source, /检查服务|action === 'check'/);
     const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');
     assert.doesNotMatch(controller, /^\s*check\)/m);

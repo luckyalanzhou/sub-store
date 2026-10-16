@@ -6,6 +6,8 @@
 
 [安装、使用与维护笔记](docs/使用笔记.md) · [GitHub Releases](https://github.com/luckyalanzhou/sub-store/releases)
 
+[项目组成与目录结构](docs/项目结构.md)
+
 ## 功能
 
 - 在 LuCI 中启动、停止和重启 Sub-Store 服务。

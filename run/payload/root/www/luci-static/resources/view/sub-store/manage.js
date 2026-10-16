@@ -429,7 +429,7 @@ return view.extend({
         this.clearLogButtons = {};
         const logSection = (name, title, action) => {
             const runtime = name === 'container';
-            const box = E('textarea', { 'class': 'cbi-input-textarea', readonly: true, rows: 20, wrap: 'off',
+            const box = E('textarea', { 'class': 'cbi-input-textarea', readonly: true, rows: 20, cols: 120, wrap: 'off',
                 role: 'log', 'aria-label': title });
             const clearButton = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
                 click: ui.createHandlerFn(this, function() {
@@ -446,12 +446,32 @@ return view.extend({
         };
         const runtimeLogs = logSection('container', '运行日志', 'clear-runtime-logs');
         const maintenanceLogs = logSection('operation', '维护日志', 'clear-maintenance-logs');
-        this.logPanes = [
-            E('div', { 'data-tab': 'runtime', 'data-tab-title': '运行日志', 'data-tab-active': 'true' }, [runtimeLogs]),
-            E('div', { 'data-tab': 'maintenance', 'data-tab-title': '维护日志' }, [maintenanceLogs])
-        ];
+        this.logPanes = [runtimeLogs, maintenanceLogs];
+        this.logTabItems = [];
+        const logTabMenu = E('ul', { 'class': 'cbi-tabmenu', role: 'tablist',
+            style: 'display:flex;flex-wrap:wrap;width:100%;margin:0;padding:0' }, [
+            ...['运行日志', '维护日志'].map((label, index) => {
+                const pane = this.logPanes[index];
+                if (index) pane.hidden = true;
+                const item = E('li', { 'class': index ? 'cbi-tab-disabled' : 'cbi-tab' }, [
+                    E('a', { href: '#', role: 'tab', 'aria-selected': index ? 'false' : 'true',
+                        click: ev => {
+                            ev.preventDefault();
+                            this.logPanes.forEach((node, paneIndex) => {
+                                node.hidden = paneIndex !== index;
+                                const tab = this.logTabItems[paneIndex];
+                                tab.className = paneIndex === index ? 'cbi-tab' : 'cbi-tab-disabled';
+                                tab.children[0].setAttribute('aria-selected', paneIndex === index ? 'true' : 'false');
+                            });
+                        } }, [label])
+                ]);
+                this.logTabItems.push(item);
+                return item;
+            })
+        ]);
+        this.logTabMenu = logTabMenu;
         const logsPanel = E('div', {}, this.logPanes);
-        display('logs', '_logs', '日志', logsPanel, '每类日志最多保留 1 MiB，超出部分自动清理。');
+        display('logs', '_logs', '日志', logsPanel);
         display('advanced', '_api', '后端直连地址', this.api);
         display('advanced', '_storage', '实际数据存储路径', this.storage);
         const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
@@ -468,7 +488,8 @@ return view.extend({
         ]));
         display('maintenance', '_rotate', 'API 密钥', rotate, '重新生成后，旧管理地址立即失效。');
         const formNode = await m.render();
-        ui.tabs.initTabGroup(this.logPanes);
+        const logTitle = formNode.querySelector && formNode.querySelector('#cbi-sub-store-main-_logs .cbi-value-title');
+        if (logTitle) logTitle.replaceWith(E('div', { 'class': 'cbi-value-title' }, [logTabMenu]));
         this.paint();
         this.pollCycle = 0;
         poll.add(async () => {
