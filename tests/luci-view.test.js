@@ -83,6 +83,8 @@ test('native page groups settings, masks key and schedules status polling', asyn
     const addressControl = t.options._management_address.renderWidget();
     assert.deepEqual(addressControl.children, [t.view.address, t.view.copyAddressButton]);
     assert.equal(t.view.status.textContent, 'sub-store 服务已启动');
+    assert.equal(t.view.version.textContent, 'test');
+    assert.equal(t.view.updateStatus.textContent, '');
     assert.equal(t.view.status.className, undefined);
     assert.equal(t.view.startButton.disabled, true);
     assert.equal(t.view.stopButton.disabled, false);
@@ -140,7 +142,6 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.notEqual(t.options.access_host.validate('main', 'http://router:3001'), true);
     assert.equal(t.options.public_url.validate('main', 'https://sub.example.test'), true);
     assert.notEqual(t.options.public_url.validate('main', 'https://bad..example.test'), true);
-    assert.match(source, /检查插件与官方镜像/);
     assert.match(source, /document\.hidden/);
     assert.match(source, /runtime-log.*maintenance-log/s);
 });
@@ -372,7 +373,7 @@ test('one update button checks the plugin and Docker image, then updates newer v
     const t = setup(); await t.view.render(await t.view.load());
     t.state.version = '0.0.21';
     assert.equal(t.view.updateButton.children[0], '检查更新');
-    assert.equal(t.view.updateStatus.textContent, '检查插件与官方镜像');
+    assert.equal(t.view.updateStatus.textContent, '');
     t.state.plugin_latest_version = '0.0.22';
     t.state.plugin_update_available = true;
     await t.view.refresh('details');
@@ -380,7 +381,6 @@ test('one update button checks the plugin and Docker image, then updates newer v
     await t.view.updateButton.click();
     const queued = t.calls.filter(call => call[0].endsWith('job.sh')).map(call => call[1][1]);
     assert.deepEqual(queued, ['update-all']);
-    assert.match(source, /检查插件与官方镜像/);
     assert.doesNotMatch(source, /检查插件更新|下载并安装|更新 Sub-Store 镜像/);
     assert.match(source, /重新生成 API 访问密钥/);
     const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');

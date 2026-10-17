@@ -148,7 +148,7 @@ return view.extend({
         this.status.textContent = unhealthy ? 'sub-store 服务运行异常' : starting ? 'sub-store 服务正在启动检查' :
             s.container === 'running' ? 'sub-store 服务已启动' :
                 'sub-store 服务状态：' + (names[s.container] || s.container || '状态未知');
-        this.version.textContent = '插件版本：' + (s.version || '未知');
+        this.version.textContent = s.version || '未知';
         this.address.value = s.url || '';
         this.open.href = s.url || '#';
         this.open.hidden = !s.url || s.container !== 'running';
@@ -189,7 +189,7 @@ return view.extend({
         else if (latest && comparison === -1)
             this.updateStatus.textContent = '插件 ' + (s.version || '未知');
         else
-            this.updateStatus.textContent = '检查插件与官方镜像';
+            this.updateStatus.textContent = '';
     },
     beginUpdateReloadCountdown: function(version) {
         if (this.pluginReloadTimer != null || this.pluginReloadCountdown !== undefined ||
@@ -409,7 +409,7 @@ return view.extend({
         this.image = E('span');
         this.appVersion = E('span');
         this.created = E('span');
-        this.updateStatus = E('span', { 'aria-live': 'polite' }, ['尚未检查更新']);
+        this.updateStatus = E('span', { 'aria-live': 'polite' });
         this.updateButton = this.button('检查更新', 'update-all', 'positive');
         this.followLogs = { container: true, operation: true };
         this.logBoxes = {};
