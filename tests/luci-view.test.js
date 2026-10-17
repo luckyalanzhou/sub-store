@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const source = fs.readFileSync('run/payload/root/www/luci-static/resources/view/sub-store/manage.js', 'utf8');
 function setup() {
     const options = {}, calls = [], polls = [];
+    const rootLogTab = { textContent: '日志', clicks: 0, click() { this.clicks += 1; } };
     const state = { container: 'running', health: 'healthy', url: 'http://router.test:3001/?api=x', busy: false, version: 'test',
         app_version: '2.42.3', created: '2026-10-13T00:00:00Z', output: 'maintenance log', container_log: 'runtime log',
         storage: '/mnt/docker/volumes/sub-store-data/_data', plugin_latest_version: '', plugin_update_available: false };
@@ -42,7 +43,11 @@ function setup() {
             map.sections.push(section);
             return section;
         }
-        async render() { return E('form'); }
+        async render() {
+            const form = E('form');
+            form.querySelectorAll = () => [rootLogTab];
+            return form;
+        }
         async save() { calls.push(['save']); }
         async load() {}
         async reset() {}
@@ -51,7 +56,7 @@ function setup() {
     const view = new Function('view', 'form', 'uci', 'rpc', 'fs', 'ui', 'poll', 'E', source)(
         { extend: value => value }, { Map, NamedSection: 1, Value: 2, DummyValue: 3 }, uci, rpc, backend, ui,
         { add: fn => polls.push(fn) }, E);
-    return { view, options, calls, state, backend, polls };
+    return { view, options, calls, state, backend, polls, rootLogTab };
 }
 test('native page groups settings, masks key and schedules status polling', async () => {
     const t = setup(); const page = await t.view.render(await t.view.load());
@@ -295,6 +300,15 @@ test('slow enqueue returns immediately and polling confirms the queued task', as
     resolveEnqueue({ code: 0, stdout: 'accepted' });
     await t.view.enqueueTask;
     assert.equal(t.calls.some(call => call[0] === 'notice'), false);
+});
+test('checking updates opens the maintenance log tab automatically', async () => {
+    const t = setup(); await t.view.render(await t.view.load());
+    await t.view.run('update-all');
+    assert.equal(t.rootLogTab.clicks, 1);
+    assert.equal(t.view.logPanes[0].hidden, true);
+    assert.equal(t.view.logPanes[1].hidden, false);
+    assert.equal(t.view.logTabItems[1].children[0]['aria-selected'], 'true');
+    await t.view.enqueueTask;
 });
 test('XHR timeout is quiet when polling confirms the queued task', async () => {
     const t = setup(); await t.view.render(await t.view.load());

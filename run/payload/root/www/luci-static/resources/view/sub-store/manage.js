@@ -239,11 +239,24 @@ return view.extend({
             this.paintLog();
         } catch (error) {}
     },
+    selectLogTab: function(index) {
+        this.logPanes.forEach((node, paneIndex) => {
+            node.hidden = paneIndex !== index;
+            const tab = this.logTabItems[paneIndex];
+            tab.className = paneIndex === index ? 'cbi-tab' : 'cbi-tab-disabled';
+            tab.children[0].setAttribute('aria-selected', paneIndex === index ? 'true' : 'false');
+        });
+    },
+    showMaintenanceLogs: function() {
+        if (this.logsPageTab) this.logsPageTab.click();
+        this.selectLogTab(1);
+    },
     run: async function(action) {
         if (this.localBusy || (this.state && this.state.busy)) throw new Error('已有操作正在执行，请等待完成。');
         if (action === 'update-all') {
             this.updateAction = action;
             this.updateStartVersion = this.state && this.state.version;
+            this.showMaintenanceLogs();
         }
         this.enqueuePendingAction = action;
         this.enqueuePreviousOperation = (this.state && this.state.operation) || '';
@@ -450,12 +463,7 @@ return view.extend({
                         style: 'display:inline-flex;width:auto;white-space:nowrap',
                         click: ev => {
                             ev.preventDefault();
-                            this.logPanes.forEach((node, paneIndex) => {
-                                node.hidden = paneIndex !== index;
-                                const tab = this.logTabItems[paneIndex];
-                                tab.className = paneIndex === index ? 'cbi-tab' : 'cbi-tab-disabled';
-                                tab.children[0].setAttribute('aria-selected', paneIndex === index ? 'true' : 'false');
-                            });
+                            this.selectLogTab(index);
                         } }, [label])
                 ]);
                 this.logTabItems.push(item);
@@ -480,6 +488,8 @@ return view.extend({
         ]));
         display('maintenance', '_rotate', 'API 密钥', rotate);
         const formNode = await m.render();
+        const pageTabs = formNode.querySelectorAll && formNode.querySelectorAll('.cbi-tabmenu a');
+        this.logsPageTab = pageTabs && Array.from(pageTabs).find(tab => tab.textContent.trim() === '日志');
         const logTitle = formNode.querySelector && formNode.querySelector('#cbi-sub-store-main-_logs .cbi-value-title');
         if (logTitle) logTitle.replaceWith(E('div', { 'class': 'cbi-value-title' }, [logTabMenu]));
         this.paint();
