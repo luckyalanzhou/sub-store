@@ -56,7 +56,7 @@ function setup() {
 test('native page groups settings, masks key and schedules status polling', async () => {
     const t = setup(); const page = await t.view.render(await t.view.load());
     assert.equal(page.tag, 'form');
-    assert.deepEqual(t.view.map.args, ['sub-store', 'sub-store', '管理 Docker 服务；订阅与配置在 Sub-Store 操作。']);
+    assert.deepEqual(t.view.map.args, ['sub-store', 'sub-store']);
     assert.equal(t.view.map.sections.length, 2);
     assert.deepEqual(t.view.map.sections[0].options.map(option => option.name), [
         '_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'
@@ -89,7 +89,9 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.restartButton.disabled, false);
     assert.equal(t.view.appVersion.textContent, '2.42.3');
     assert.equal(t.view.image.textContent, '容器镜像未就绪');
-    assert.equal(t.view.imageDigest.hidden, true);
+    t.view.state.image = 'xream/sub-store:latest / sha256:abcdef0123456789';
+    t.view.paint();
+    assert.equal(t.view.image.textContent, 'xream/sub-store:latest');
     assert.equal(t.view.storage.value, t.state.storage);
     for (const id of ['_image', '_app_version', '_created', '_updates', '_rotate'])
         assert.equal(t.options[id].tab, 'maintenance');
@@ -100,17 +102,20 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.doesNotMatch(source, /#cbi-sub-store-main-_maintenance/);
     assert.doesNotMatch(source, /sub-store-page|sub-store-overview|sub-store-status|sub-store-log-panel|pageStyles|E\('style'/);
     assert.match(source, /'class': 'cbi-input-textarea'/);
-    assert.match(source, /Docker 端口映射，外部端口转发需另行调整/);
     assert.equal(t.view.logBoxes.container.value, 'runtime log');
     assert.equal(t.view.logBoxes.operation.value, 'maintenance log');
     assert.equal(t.view.logBoxes.container.cols, 120);
     assert.equal(t.options._logs.tab, 'logs');
-    assert.equal(t.options._logs.label, '日志');
+    assert.equal(t.options._logs.label, '');
     assert.equal(t.options._logs.description, undefined);
+    assert.equal(t.options._rotate.description, undefined);
+    assert.ok(Object.values(t.options).every(option => option.description === undefined));
     assert.equal(t.view.clearLogButtons.container.children[0], '清空日志');
     assert.equal(t.view.clearLogButtons.operation.children[0], '清空日志');
     assert.deepEqual(t.view.logTabMenu.children.map(item => item.children[0].children[0]), ['运行日志', '维护日志']);
     assert.equal(t.view.logTabMenu.style, 'display:flex;flex-wrap:wrap;width:100%;margin:0;padding:0');
+    assert.ok(t.view.logTabMenu.children.every(item => item.style === 'display:inline-flex;flex:0 0 auto;width:auto'));
+    assert.ok(t.view.logTabMenu.children.every(item => item.children[0].style === 'display:inline-flex;width:auto;white-space:nowrap'));
     assert.equal(t.options._logs.renderWidget().children[0], t.view.logPanes[0]);
     assert.equal(t.view.logPanes[0].children[0], t.view.clearLogButtons.container);
     assert.equal(t.view.logPanes[1].children[0], t.view.clearLogButtons.operation);

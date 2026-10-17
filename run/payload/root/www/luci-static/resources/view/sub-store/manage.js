@@ -154,11 +154,8 @@ return view.extend({
         this.open.hidden = !s.url || s.container !== 'running';
         this.copyAddressButton.disabled = !s.url;
         this.storage.value = s.storage || '实际路径暂不可用';
-        const image = String(s.image || '').split(/\s+\/\s+/, 2);
+        const image = String(s.image || '').split(/\s+\/\s+/, 1);
         this.image.textContent = image[0] || '容器镜像未就绪';
-        this.imageDigest.textContent = image[1] ? image[1].slice(0, 19) + '…' : '';
-        this.imageDigest.title = image[1] || '';
-        this.imageDigest.hidden = !image[1];
         this.appVersion.textContent = s.app_version || '容器日志未提供版本号';
         this.created.textContent = this.formatLocalDate(s.created) || '容器尚未创建';
         this.api.value = s.api_url || '';
@@ -352,7 +349,7 @@ return view.extend({
         this.startButton = this.button('启动服务', 'start');
         this.stopButton = this.button('停止服务', 'stop', 'negative');
         this.restartButton = this.button('重启服务', 'restart');
-        const m = this.map = new form.Map('sub-store', 'sub-store', '管理 Docker 服务；订阅与配置在 Sub-Store 操作。');
+        const m = this.map = new form.Map('sub-store', 'sub-store');
         const overview = m.section(form.NamedSection, 'main', 'settings', '服务概览');
         const s = m.section(form.NamedSection, 'main', 'settings');
         s.tab('basic', '基本设置');
@@ -364,9 +361,8 @@ return view.extend({
             option.renderWidget = function() { return node; };
             return option;
         };
-        const display = (tab, id, label, node, description) => {
+        const display = (tab, id, label, node) => {
             const option = s.taboption(tab, form.DummyValue, id, label);
-            if (description) option.description = description;
             option.renderWidget = function() { return node; };
             return option;
         };
@@ -379,17 +375,13 @@ return view.extend({
         ]));
         let o = s.taboption('basic', form.Value, 'frontend_port', '管理页面端口');
         o.datatype = 'port'; o.rmempty = false; o.default = '3001';
-        o.description = '默认 3001；保存后更新 Docker 端口映射，外部端口转发需另行调整。';
         const frontend = o;
         o = s.taboption('basic', form.Value, 'access_host', '访问主机名');
-        o.description = '留空使用 LAN 地址；也可填写域名或 IP，不含协议和端口。';
         o.validate = function(section, value) {
             return !value || (value.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(value) &&
                 !/\.\.|-\.|\.-/.test(value)) || '请输入域名或 IPv4，不含协议和端口。';
         };
         o = s.taboption('basic', form.Value, 'public_url', '公开访问地址');
-        o.placeholder = 'https://sub.example.com';
-        o.description = '可选；使用反向代理或外部端口时填写，优先用于生成管理链接。';
         o.validate = function(section, value) {
             if (!value) return true;
             if (!/^https?:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(?:\/[^?#\s]*)?$/.test(value))
@@ -404,22 +396,17 @@ return view.extend({
         o = s.taboption('advanced', form.Value, 'backend_port', '后端 API 端口');
         o.datatype = 'port'; o.rmempty = false; o.default = '3000';
         o.validate = function(section, value) { return +value !== +frontend.formvalue(section) || '前后端端口不能相同。'; };
-        o.description = '仅供路由器本机或明确启用的局域网直连，普通用户保持默认。';
         o = s.taboption('advanced', form.Flag, 'backend_lan_access', '允许局域网直连后端');
         o.default = '0'; o.rmempty = false;
-        o.description = '默认关闭；管理页面仍通过前端端口访问 API。';
         o = s.taboption('advanced', form.Value, 'api_path', 'API 随机路径');
         o.password = true; o.rmempty = false;
-        o.description = '后端访问密钥，已包含在管理地址中，请勿公开。';
         o.validate = function(section, value) { return /^[a-fA-F0-9]{48}$/.test(value) || '请输入 48 位十六进制字符。'; };
         o = s.taboption('advanced', form.Value, 'sync_cron', '自动同步计划');
         o.default = '55 23 * * *'; o.rmempty = false;
-        o.description = '默认每天北京时间 23:55；不了解 Cron 时保持默认。';
         o.validate = function(section, value) { return validCron(value) || 'Cron 格式或字段范围不正确。'; };
         this.api = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '后端直连地址' });
         this.storage = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '实际数据存储路径' });
         this.image = E('span');
-        this.imageDigest = E('small');
         this.appVersion = E('span');
         this.created = E('span');
         this.updateStatus = E('span', { 'aria-live': 'polite' }, ['尚未检查更新']);
@@ -453,8 +440,10 @@ return view.extend({
             ...['运行日志', '维护日志'].map((label, index) => {
                 const pane = this.logPanes[index];
                 if (index) pane.hidden = true;
-                const item = E('li', { 'class': index ? 'cbi-tab-disabled' : 'cbi-tab' }, [
+                const item = E('li', { 'class': index ? 'cbi-tab-disabled' : 'cbi-tab',
+                    style: 'display:inline-flex;flex:0 0 auto;width:auto' }, [
                     E('a', { href: '#', role: 'tab', 'aria-selected': index ? 'false' : 'true',
+                        style: 'display:inline-flex;width:auto;white-space:nowrap',
                         click: ev => {
                             ev.preventDefault();
                             this.logPanes.forEach((node, paneIndex) => {
@@ -471,7 +460,7 @@ return view.extend({
         ]);
         this.logTabMenu = logTabMenu;
         const logsPanel = E('div', {}, this.logPanes);
-        display('logs', '_logs', '日志', logsPanel);
+        display('logs', '_logs', '', logsPanel);
         display('advanced', '_api', '后端直连地址', this.api);
         display('advanced', '_storage', '实际数据存储路径', this.storage);
         const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
@@ -479,14 +468,13 @@ return view.extend({
                 return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');
             }) }, ['重新生成密钥']);
         this.buttons.push(rotate);
-        const imageValue = E('span', {}, [this.image, ' ', this.imageDigest]);
-        display('maintenance', '_image', 'Docker 镜像', imageValue);
+        display('maintenance', '_image', 'Docker 镜像', this.image);
         display('maintenance', '_app_version', 'Sub-Store 版本', this.appVersion);
         display('maintenance', '_created', '容器创建时间', this.created);
         display('maintenance', '_updates', '插件与镜像更新', E('div', {}, [
             this.updateButton, ' ', E('span', { 'aria-live': 'polite' }, [this.updateStatus])
         ]));
-        display('maintenance', '_rotate', 'API 密钥', rotate, '重新生成后，旧管理地址立即失效。');
+        display('maintenance', '_rotate', 'API 密钥', rotate);
         const formNode = await m.render();
         const logTitle = formNode.querySelector && formNode.querySelector('#cbi-sub-store-main-_logs .cbi-value-title');
         if (logTitle) logTitle.replaceWith(E('div', { 'class': 'cbi-value-title' }, [logTabMenu]));
