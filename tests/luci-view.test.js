@@ -13,7 +13,7 @@ function setup() {
         if (global.window && global.window.requireCurrentTarget && !args.some(arg => arg && arg.currentTarget))
             throw new TypeError('event.currentTarget is required');
         return fn.apply(ctx, args);
-    }, changes: { init: async () => {} },
+    }, changes: { init: async () => {}, apply: async () => { calls.push(['apply']); } },
         tabs: { initTabGroup: panes => calls.push(['tabs', panes]) },
         addNotification: (...args) => calls.push(['notice', ...args]), showModal: (...args) => calls.push(['modal', ...args]), hideModal() {} };
     const uci = { load: async () => {}, unload() {} };
@@ -239,20 +239,21 @@ test('image-only update does not reload the LuCI page', async () => {
         else global.window = previousWindow;
     }
 });
-test('save-and-apply validates and commits before enqueueing restart', async () => {
+test('save-and-apply commits, enqueues restart and applies staged LuCI changes', async () => {
     const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
     await t.view.handleSaveApply();
-    await t.view.enqueueTask;
     const index = name => t.calls.findIndex(call => call[0] === name);
     assert.ok(index('save') < index('commit'));
     assert.ok(index('commit') < index('/usr/lib/sub-store/job.sh'));
+    assert.ok(index('/usr/lib/sub-store/job.sh') < index('apply'));
     assert.deepEqual(t.calls[index('/usr/lib/sub-store/job.sh')][1], ['--enqueue', 'restart']);
+    assert.equal(t.calls.filter(call => call[0] === 'apply').length, 1);
 });
 test('invalid settings prevent commit and service restart', async () => {
     const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
     t.view.map.save = async () => { throw new Error('invalid'); };
     await assert.rejects(t.view.handleSaveApply(), /invalid/);
-    assert.equal(t.calls.some(call => call[0] === 'commit' || call[0].endsWith('job.sh')), false);
+    assert.equal(t.calls.some(call => call[0] === 'commit' || call[0] === 'apply' || call[0].endsWith('job.sh')), false);
     assert.equal(t.view.localBusy, false);
 });
 test('running task prevents save and competing operation', async () => {

@@ -326,7 +326,11 @@ return view.extend({
         await this.handleSave();
         this.reloadAfterTask = true;
         this.reloadTaskAccepted = false;
-        try { await this.run('restart'); }
+        try {
+            await this.run('restart');
+            await this.enqueueTask;
+            await ui.changes.apply();
+        }
         catch (error) { this.reloadAfterTask = false; throw error; }
     },
     handleReset: function() { return this.map.reset(); },
