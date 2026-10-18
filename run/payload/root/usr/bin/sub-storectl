@@ -469,6 +469,41 @@ restore_previous_image_tag() {
     }
 }
 
+cleanup_replaced_image() {
+    # Only the image of the container replaced by this update is eligible.
+    printf '%s\n' "${PREVIOUS_IMAGE_ID:-}" | grep -Eq '^sha256:[0-9a-f]{64}$' || return 0
+    cleanup_current_image="$(docker inspect -f '{{.Image}}' sub-store 2>/dev/null)" || {
+        echo "WARNING: Could not verify the current image; old image cleanup was skipped." >&2
+        return 0
+    }
+    printf '%s\n' "$cleanup_current_image" | grep -Eq '^sha256:[0-9a-f]{64}$' || return 0
+    [ "$PREVIOUS_IMAGE_ID" != "$cleanup_current_image" ] || return 0
+
+    cleanup_refs="$(docker image inspect -f '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' "$PREVIOUS_IMAGE_ID" 2>/dev/null)" || {
+        echo "WARNING: Could not inspect the old image; cleanup was skipped." >&2
+        return 0
+    }
+    # Preserve images also named by the user or another repository.
+    if printf '%s\n' "$cleanup_refs" | grep -Ev '^(|(docker\.io/)?xream/sub-store(:[^[:space:]]+|@sha256:[0-9a-f]{64}))$' >/dev/null; then
+        echo "Old image has other repository references; keeping it."
+        return 0
+    fi
+    cleanup_users="$(docker ps -aq --filter "ancestor=$PREVIOUS_IMAGE_ID" 2>/dev/null)" || {
+        echo "WARNING: Could not check old image usage; cleanup was skipped." >&2
+        return 0
+    }
+    if [ -n "$cleanup_users" ]; then
+        echo "Old image is still used by another container; keeping it."
+        return 0
+    fi
+    # No force, global prune, volume removal, or filesystem deletion.
+    if docker image rm --no-prune "$PREVIOUS_IMAGE_ID"; then
+        echo "旧镜像已清理，用户数据保留。"
+    else
+        echo "WARNING: Update succeeded, but the old image could not be removed; keeping it." >&2
+    fi
+}
+
 rollback_replacement() {
     if docker inspect sub-store >/dev/null 2>&1; then
         docker rm -f sub-store >/dev/null 2>&1 || true
@@ -675,6 +710,8 @@ replace_container() {
         if [ "$HAD_OLD_CONTAINER" = "1" ]; then
             if ! docker rm "$BACKUP_NAME" >/dev/null 2>&1; then
                 echo "WARNING: New container is running, but the stopped rollback container $BACKUP_NAME could not be removed." >&2
+            elif [ "${1:-}" = "update" ]; then
+                cleanup_replaced_image
             fi
         fi
         return 0
