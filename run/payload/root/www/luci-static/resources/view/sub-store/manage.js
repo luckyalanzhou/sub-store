@@ -38,13 +38,6 @@ function compareVersions(left, right) {
 return view.extend({
     validCron: validCron,
     compareVersions: compareVersions,
-    formatLocalDate: function(value) {
-        const date = new Date(value);
-        if (!value || Number.isNaN(date.getTime())) return value || '';
-        const pad = number => String(number).padStart(2, '0');
-        return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' +
-            pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
-    },
     snapshot: async function(mode) {
         const r = await fs.exec('/usr/lib/sub-store/status', mode && mode !== 'summary' ? [mode] : []);
         if (r.code !== 0) throw new Error(r.stderr || '读取服务状态失败');
@@ -157,7 +150,6 @@ return view.extend({
         const image = String(s.image || '').split(/\s+\/\s+/, 1);
         this.image.textContent = image[0] || '容器镜像未就绪';
         this.appVersion.textContent = s.app_version || '容器日志未提供版本号';
-        this.created.textContent = this.formatLocalDate(s.created) || '容器尚未创建';
         this.api.value = s.api_url || '';
         this.updateControls();
         this.paintLog();
@@ -363,9 +355,9 @@ return view.extend({
             }
             ui.addNotification(null, E('p', {}, ['管理链接已复制。']), 'info');
         }) }, ['复制']);
-        this.startButton = this.button('启动服务', 'start');
-        this.stopButton = this.button('停止服务', 'stop', 'negative');
-        this.restartButton = this.button('重启服务', 'restart');
+        this.startButton = this.button('启动', 'start');
+        this.stopButton = this.button('停止', 'stop', 'negative');
+        this.restartButton = this.button('重启', 'restart');
         const m = this.map = new form.Map('sub-store', 'sub-store');
         const overview = m.section(form.NamedSection, 'main', 'settings', '服务概览');
         const s = m.section(form.NamedSection, 'main', 'settings');
@@ -383,9 +375,9 @@ return view.extend({
             return option;
         };
         displayOverview('_service_status', '服务状态', this.status);
-        displayOverview('_plugin_version', '插件版本', this.version);
-        displayOverview('_management_ui', '管理界面', this.open);
-        displayOverview('_management_address', '管理访问地址', E('div', {}, [this.address, this.copyAddressButton]));
+        displayOverview('_management_address', '管理地址', E('div', {}, [
+            this.address, ' ', this.open, ' ', this.copyAddressButton
+        ]));
         displayOverview('_service_control', '服务控制', E('div', {}, [
             this.startButton, ' ', this.stopButton, ' ', this.restartButton
         ]));
@@ -415,18 +407,17 @@ return view.extend({
         o = s.taboption('basic', form.Flag, 'backend_lan_access', '允许局域网直连后端');
         o.default = '0'; o.rmempty = false;
         this.api = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '后端直连地址' });
-        display('basic', '_api', '后端直连地址', this.api);
-        o = s.taboption('basic', form.Value, 'api_path', 'API 随机路径');
+        display('basic', '_api', '后端直连地址', this.api).depends('backend_lan_access', '1');
+        o = s.taboption('basic', form.Value, 'api_path', 'API 密钥');
         o.password = true; o.rmempty = false;
         o.validate = function(section, value) { return /^[a-fA-F0-9]{48}$/.test(value) || '请输入 48 位十六进制字符。'; };
-        o = s.taboption('basic', form.Value, 'sync_cron', '自动同步计划');
+        o = s.taboption('basic', form.Value, 'sync_cron', '同步计划');
         o.default = '55 23 * * *'; o.rmempty = false;
         o.validate = function(section, value) { return validCron(value) || 'Cron 格式或字段范围不正确。'; };
         this.storage = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '实际数据存储路径' });
         display('basic', '_storage', '实际数据存储路径', this.storage);
         this.image = E('span');
         this.appVersion = E('span');
-        this.created = E('span');
         this.updateStatus = E('span', { 'aria-live': 'polite' });
         this.updateButton = this.button('检查更新', 'update-all', 'positive');
         this.followLogs = { container: true, operation: true };
@@ -477,12 +468,12 @@ return view.extend({
         const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
             click: ui.createHandlerFn(this, function() {
                 return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');
-            }) }, ['重新生成密钥']);
+            }) }, ['重新生成']);
         this.buttons.push(rotate);
-        display('maintenance', '_image', 'Docker 镜像', this.image);
+        display('maintenance', '_plugin_version', '插件版本', this.version);
         display('maintenance', '_app_version', 'Sub-Store 版本', this.appVersion);
-        display('maintenance', '_created', '容器创建时间', this.created);
-        display('maintenance', '_updates', '插件与镜像更新', E('div', {}, [
+        display('maintenance', '_image', 'Docker 镜像', this.image);
+        display('maintenance', '_updates', '更新', E('div', {}, [
             this.updateButton, ' ', E('span', { 'aria-live': 'polite' }, [this.updateStatus])
         ]));
         display('maintenance', '_rotate', 'API 密钥', rotate);

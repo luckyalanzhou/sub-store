@@ -35,7 +35,8 @@ function setup() {
                 option(type, name, label) { return addOption(undefined, type, name, label); },
                 taboption(tab, type, name, label) { return addOption(tab, type, name, label); } };
             const addOption = (tab, type, name, label) => {
-                const option = { tab, type, name, label, formvalue: () => option.input };
+                const option = { tab, type, name, label, formvalue: () => option.input,
+                    depends(field, value) { option.dependency = { field, value }; } };
                 section.options.push(option);
                 options[name] = option;
                 return option;
@@ -64,7 +65,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.deepEqual(t.view.map.args, ['sub-store', 'sub-store']);
     assert.equal(t.view.map.sections.length, 2);
     assert.deepEqual(t.view.map.sections[0].options.map(option => option.name), [
-        '_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'
+        '_service_status', '_management_address', '_service_control'
     ]);
     assert.equal(t.view.map.sections[0].args[3], '服务概览');
     assert.deepEqual(t.view.map.sections[1].tabs.map(tab => tab.name), ['basic', 'logs', 'maintenance']);
@@ -73,8 +74,11 @@ test('native page groups settings, masks key and schedules status polling', asyn
         'backend_port', 'backend_lan_access', '_api',
         'api_path', 'sync_cron', '_storage'
     ]);
-    for (const id of ['_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'])
+    for (const id of ['_service_status', '_management_address', '_service_control'])
         assert.equal(t.options[id].tab, undefined);
+    assert.equal(t.options._management_ui, undefined);
+    assert.equal(t.options._created, undefined);
+    assert.deepEqual(t.options._api.dependency, { field: 'backend_lan_access', value: '1' });
     assert.equal(t.options.frontend_port.tab, 'basic');
     assert.equal(t.options.public_url.tab, 'basic');
     assert.equal(t.options.backend_port.tab, 'basic');
@@ -91,7 +95,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.copyAddressButton['aria-label'], '复制访问地址');
     assert.equal(t.view.copyAddressButton.disabled, false);
     const addressControl = t.options._management_address.renderWidget();
-    assert.deepEqual(addressControl.children, [t.view.address, t.view.copyAddressButton]);
+    assert.deepEqual(addressControl.children, [t.view.address, ' ', t.view.open, ' ', t.view.copyAddressButton]);
     assert.equal(t.view.status.textContent, 'sub-store 服务已启动');
     assert.equal(t.view.version.textContent, 'test');
     assert.equal(t.view.updateStatus.textContent, '');
@@ -105,7 +109,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     t.view.paint();
     assert.equal(t.view.image.textContent, 'xream/sub-store:latest');
     assert.equal(t.view.storage.value, t.state.storage);
-    for (const id of ['_image', '_app_version', '_created', '_updates', '_rotate'])
+    for (const id of ['_plugin_version', '_image', '_app_version', '_updates', '_rotate'])
         assert.equal(t.options[id].tab, 'maintenance');
     assert.equal(t.options._maintenance, undefined);
     assert.equal(t.view.maintenancePanel, undefined);
@@ -168,10 +172,6 @@ test('service actions follow the current container state', async () => {
     assert.equal(t.view.startButton.disabled, true);
     assert.equal(t.view.stopButton.disabled, true);
     assert.equal(t.view.restartButton.disabled, true);
-});
-test('container time is localized', () => {
-    const { view } = setup();
-    assert.match(view.formatLocalDate('2026-10-14T14:37:35.576Z'), /^2026-10-14 \d{2}:37:35$/);
 });
 test('unhealthy container is visible and completed work refreshes details', async () => {
     const t = setup(); await t.view.render(await t.view.load());
