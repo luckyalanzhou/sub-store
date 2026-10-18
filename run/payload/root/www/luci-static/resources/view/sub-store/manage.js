@@ -370,7 +370,6 @@ return view.extend({
         const overview = m.section(form.NamedSection, 'main', 'settings', '服务概览');
         const s = m.section(form.NamedSection, 'main', 'settings');
         s.tab('basic', '基本设置');
-        s.tab('advanced', '高级设置');
         s.tab('logs', '日志');
         s.tab('maintenance', '更新维护');
         const displayOverview = (id, label, node) => {
@@ -410,19 +409,21 @@ return view.extend({
             const port = authority.includes(':') ? +authority.split(':').pop() : 0;
             return !port || (port >= 1 && port <= 65535) || '端口必须在 1 到 65535 之间。';
         };
-        o = s.taboption('advanced', form.Value, 'backend_port', '后端 API 端口');
+        o = s.taboption('basic', form.Value, 'backend_port', '后端 API 端口');
         o.datatype = 'port'; o.rmempty = false; o.default = '3000';
         o.validate = function(section, value) { return +value !== +frontend.formvalue(section) || '前后端端口不能相同。'; };
-        o = s.taboption('advanced', form.Flag, 'backend_lan_access', '允许局域网直连后端');
+        o = s.taboption('basic', form.Flag, 'backend_lan_access', '允许局域网直连后端');
         o.default = '0'; o.rmempty = false;
-        o = s.taboption('advanced', form.Value, 'api_path', 'API 随机路径');
+        this.api = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '后端直连地址' });
+        display('basic', '_api', '后端直连地址', this.api);
+        o = s.taboption('basic', form.Value, 'api_path', 'API 随机路径');
         o.password = true; o.rmempty = false;
         o.validate = function(section, value) { return /^[a-fA-F0-9]{48}$/.test(value) || '请输入 48 位十六进制字符。'; };
-        o = s.taboption('advanced', form.Value, 'sync_cron', '自动同步计划');
+        o = s.taboption('basic', form.Value, 'sync_cron', '自动同步计划');
         o.default = '55 23 * * *'; o.rmempty = false;
         o.validate = function(section, value) { return validCron(value) || 'Cron 格式或字段范围不正确。'; };
-        this.api = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '后端直连地址' });
         this.storage = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '实际数据存储路径' });
+        display('basic', '_storage', '实际数据存储路径', this.storage);
         this.image = E('span');
         this.appVersion = E('span');
         this.created = E('span');
@@ -473,8 +474,6 @@ return view.extend({
         this.logTabMenu = logTabMenu;
         const logsPanel = E('div', {}, this.logPanes);
         display('logs', '_logs', '', logsPanel);
-        display('advanced', '_api', '后端直连地址', this.api);
-        display('advanced', '_storage', '实际数据存储路径', this.storage);
         const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
             click: ui.createHandlerFn(this, function() {
                 return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');

@@ -67,12 +67,17 @@ test('native page groups settings, masks key and schedules status polling', asyn
         '_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'
     ]);
     assert.equal(t.view.map.sections[0].args[3], '服务概览');
-    assert.deepEqual(t.view.map.sections[1].tabs.map(tab => tab.name), ['basic', 'advanced', 'logs', 'maintenance']);
+    assert.deepEqual(t.view.map.sections[1].tabs.map(tab => tab.name), ['basic', 'logs', 'maintenance']);
+    assert.deepEqual(t.view.map.sections[1].options.filter(option => option.tab === 'basic').map(option => option.name), [
+        'frontend_port', 'access_host', 'public_url',
+        'backend_port', 'backend_lan_access', '_api',
+        'api_path', 'sync_cron', '_storage'
+    ]);
     for (const id of ['_service_status', '_plugin_version', '_management_ui', '_management_address', '_service_control'])
         assert.equal(t.options[id].tab, undefined);
     assert.equal(t.options.frontend_port.tab, 'basic');
     assert.equal(t.options.public_url.tab, 'basic');
-    assert.equal(t.options.backend_port.tab, 'advanced');
+    assert.equal(t.options.backend_port.tab, 'basic');
     assert.equal(t.options.log_max_size_mb, undefined);
     assert.equal(t.options.log_max_files, undefined);
     assert.equal(t.options.api_path.password, true);
