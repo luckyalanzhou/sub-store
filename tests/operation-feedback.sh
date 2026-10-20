@@ -35,15 +35,6 @@ exec "$REAL_CHMOD" "$@"
 EOF
 cat > "$TMP/bin/stat" <<'EOF'
 #!/bin/sh
-if [ -n "${FAKE_STATE_OWNER:-}" ] && [ "$#" -eq 3 ] &&
-    [ "$1" = "-c" ] && [ "$2" = "%u" ]; then
-    case "$3" in
-        */foreign-state)
-            printf '%s\n' "$FAKE_STATE_OWNER"
-            exit 0
-            ;;
-    esac
-fi
 if [ "${BUSYBOX_TEST:-0}" = "1" ]; then
     exec busybox stat "$@"
 fi
@@ -80,15 +71,29 @@ if run_sh "$TMP/job" check; then
 fi
 mkdir -p "$TMP/foreign-state"
 "$REAL_CHMOD" 755 "$TMP/foreign-state"
-sed -e "s|STATE=/tmp/sub-store-operation|STATE=$TMP/foreign-state|" \
-    -e "s|/usr/bin/sub-storectl|$TMP/ctl|" \
-    "$ROOT/installer/payload/root/usr/lib/sub-store/job.sh" > "$TMP/foreign-job"
-export FAKE_STATE_OWNER=99999
+{
+    cat <<'EOF'
+stat() {
+    if [ "$#" -ne 3 ] || [ "$1" != "-c" ] || [ "$2" != "%u" ] ||
+        [ "$3" != "$FAKE_STATE_PATH" ]; then
+        printf 'Unexpected stat invocation in ownership test: %s\n' "$*" >&2
+        return 2
+    fi
+    printf '%s\n' "$FAKE_STATE_OWNER"
+}
+EOF
+    sed -e "s|STATE=/tmp/sub-store-operation|STATE=$TMP/foreign-state|" \
+        -e "s|/usr/bin/sub-storectl|$TMP/ctl|" \
+        "$ROOT/installer/payload/root/usr/lib/sub-store/job.sh"
+} > "$TMP/foreign-job"
+current_uid="$(id -u)"
+if [ "$current_uid" = 0 ]; then FAKE_STATE_OWNER=1; else FAKE_STATE_OWNER=0; fi
+export FAKE_STATE_OWNER FAKE_STATE_PATH="$TMP/foreign-state"
 if run_sh "$TMP/foreign-job" start > "$TMP/foreign-output" 2>&1; then
     echo 'A foreign-owned operation state directory was accepted.' >&2
     exit 1
 fi
-unset FAKE_STATE_OWNER
+unset FAKE_STATE_OWNER FAKE_STATE_PATH
 grep -Fq 'Operation state directory is not trusted' "$TMP/foreign-output" || {
     cat "$TMP/foreign-output" >&2
     echo 'The foreign-owned operation state directory failed for an unexpected reason.' >&2
@@ -98,7 +103,6 @@ grep -Fq 'Operation state directory is not trusted' "$TMP/foreign-output" || {
     echo 'The worker touched a foreign-owned operation state directory.' >&2
     exit 1
 }
-unset STATE_TO_CHECK
 case "$(uname -s)" in
     MINGW*|MSYS*) ;;
     *)
