@@ -27,6 +27,7 @@ Sub-Store 的 LuCI 管理插件，使用官方 [`xream/sub-store`](https://hub.d
 ## 文档
 
 - [使用笔记](docs/使用笔记.md)：配置、远程访问、数据导出与故障排查。
+- [术语表](GLOSSARY.md)：管理地址和 API 密钥。
 
 ## 开源协议
 
