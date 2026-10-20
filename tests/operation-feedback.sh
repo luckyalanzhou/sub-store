@@ -28,6 +28,14 @@ chmod +x "$TMP/ctl"
 mkdir "$TMP/bin"
 REAL_CHMOD="$(command -v chmod)"
 REAL_STAT="$(command -v stat)"
+REAL_DD="$(command -v dd)"
+cat > "$TMP/bin/dd" <<'EOF'
+#!/bin/sh
+if [ "${BUSYBOX_TEST:-0}" = "1" ]; then
+    exec busybox dd "$@"
+fi
+exec "$REAL_DD" "$@"
+EOF
 cat > "$TMP/bin/chmod" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >> "$CHMOD_LOG"
@@ -42,7 +50,8 @@ exec "$REAL_STAT" "$@"
 EOF
 "$REAL_CHMOD" +x "$TMP/bin/chmod"
 "$REAL_CHMOD" +x "$TMP/bin/stat"
-export REAL_CHMOD REAL_STAT CHMOD_LOG="$TMP/chmod.log"
+"$REAL_CHMOD" +x "$TMP/bin/dd"
+export REAL_CHMOD REAL_STAT REAL_DD CHMOD_LOG="$TMP/chmod.log"
 PATH="$TMP/bin:$PATH"
 export PATH
 sed -e "s|STATE=/tmp/sub-store-operation|STATE=$TMP/state|" \
@@ -216,6 +225,7 @@ elapsed=$(( $(date +%s) - started ))
 attempt=0
 sleep 1
 live_log_size="$(wc -c < "$TMP/state/output.log" | tr -d '[:space:]')"
+[ "$live_log_size" -gt 0 ] || { echo 'operation output was not visible while the worker was running.' >&2; exit 1; }
 [ "$live_log_size" -le 1048576 ] || { echo "live operation log exceeded its cap: ${live_log_size} bytes" >&2; exit 1; }
 while [ -d "$TMP/state/lock" ]; do
     attempt=$((attempt + 1))
