@@ -13,6 +13,7 @@ if [ "$1" = "update" ] && [ -f "$INTERRUPT_UPDATE" ]; then
     echo 'operation output: interrupt-controlled update complete'
     exit 0
 fi
+[ "$1" != "restart" ] || : > "$RESTART_STARTED"
 [ "$1" != "update" ] || {
     if [ -f "$SLOW_UPDATE" ]; then
         dd if=/dev/zero bs=1024 count=1200 2>/dev/null | tr '\000' x
@@ -22,7 +23,7 @@ fi
     fi
     exit 7
 }
-[ "$1" != "restart" ] || sleep 1
+[ "$1" != "restart" ] || sleep 3
 EOF
 chmod +x "$TMP/ctl"
 mkdir "$TMP/bin"
@@ -81,12 +82,13 @@ report_worker_timeout() {
     worker_pid="$(cat "$state_dir/lock/pid" 2>/dev/null || true)"
     case "$worker_pid" in
         ''|*[!0-9]*) ;;
-        *) ps -o pid,ppid,stat,args -p "$worker_pid" >&2 || true ;;
+        *) ps | awk -v pid="$worker_pid" 'NR == 1 || $1 == pid' >&2 || true ;;
     esac
 }
 export SLOW_UPDATE="$TMP/slow-update"
 export INTERRUPT_UPDATE="$TMP/interrupt-update"
 export COMMAND_PID_FILE="$TMP/interrupted-command.pid"
+export RESTART_STARTED="$TMP/restart-started"
 export RELEASE_UPDATE="$TMP/release-interrupted-update"
 export COMMAND_FINISHED="$TMP/interrupted-command-finished"
 if run_sh "$TMP/job" check; then
@@ -225,9 +227,19 @@ run_sh "$TMP/job" --enqueue restart
 grep -q running "$TMP/state/phase"
 if run_sh "$TMP/job" --enqueue stop; then exit 1; fi
 attempt=0
+while [ ! -e "$RESTART_STARTED" ]; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 20 ]; then
+        report_worker_timeout "$TMP/state"
+        echo 'The restart command did not start in time.' >&2
+        exit 1
+    fi
+    sleep 0.05
+done
+attempt=0
 while ! grep -q 'operation output: restart' "$TMP/state/output.log"; do
     attempt=$((attempt + 1))
-    if [ "$attempt" -ge 10 ]; then
+    if [ "$attempt" -ge 20 ]; then
         report_worker_timeout "$TMP/state"
         echo 'Operation output was not visible before the worker exited.' >&2
         exit 1
