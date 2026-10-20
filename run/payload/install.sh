@@ -343,11 +343,19 @@ uci commit sub-store
 chmod 600 /etc/config/sub-store
 /usr/bin/sub-storectl render
 
-step 5 "拉取或复用官方镜像、启动容器并检查服务（首次下载可能较慢）"
+step 5 "部署官方镜像、启动容器并检查服务"
 MANAGED_UPGRADE=0
 if [ "$EXISTING" = "1" ] && [ -f /etc/sub-store/installed ]; then
     MANAGED_UPGRADE=1
     say "Updating the managed sub-store container..."
+fi
+
+if [ "$EXISTING" != "1" ]; then
+    say "首次安装，联网拉取官方最新镜像..."
+    /usr/bin/sub-storectl pull || fail "Could not pull the official image; installation was stopped before deploying the container."
+    uci set sub-store.main.image_ref='xream/sub-store:latest'
+    uci commit sub-store
+    chmod 600 /etc/config/sub-store
 fi
 
 if [ "$MANAGED_UPGRADE" = "1" ]; then
