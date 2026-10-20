@@ -22,6 +22,7 @@ APP_VERSION_CHECK="$ROOT/installer/payload/root/usr/lib/sub-store/app-version.js
 IMAGE_REF=xream/sub-store:latest
 RUN_IMAGE_REF="$IMAGE_REF"
 MOCK_VOLUME_PATH="$TEST_DIR/docker-root/volumes/$DATA_VOLUME/_data"
+INITIAL_MOCK_VOLUME_PATH="$MOCK_VOLUME_PATH"
 MOCK_CONTAINER=0
 MOCK_MERGE=""
 MOCK_FRONTEND_MAPPING=""
@@ -244,6 +245,57 @@ if copy_directory_to_volume "$TEST_DIR" >/dev/null 2>&1; then
     echo 'Migration accepted a source containing the Docker volume.' >&2
     exit 1
 fi
+
+UNINSTALL_TEST_ROOT="$TEST_DIR/uninstall-root"
+mkdir -p "$UNINSTALL_TEST_ROOT"
+awk 'index($0, "uninstall_plugin() {") == 1 {copy=1} /^ACTION=/ {exit} copy {print}' "$CTL" |
+    sed -e "s|/tmp/|$UNINSTALL_TEST_ROOT/tmp/|g" \
+        -e "s|/etc/|$UNINSTALL_TEST_ROOT/etc/|g" \
+        -e "s|/usr/|$UNINSTALL_TEST_ROOT/usr/|g" \
+        -e "s|/www/|$UNINSTALL_TEST_ROOT/www/|g" > "$TEST_DIR/uninstall-function.sh"
+. "$TEST_DIR/uninstall-function.sh"
+
+MOCK_VOLUME_PATH="$TEST_DIR/uninstall-default/_data"
+mkdir -p "$MOCK_VOLUME_PATH"
+printf '%s\n' 'default uninstall data' > "$MOCK_VOLUME_PATH/storage.json"
+MOCK_CONTAINER=1
+: > "$DOCKER_LOG"
+uninstall_plugin
+[ -f "$MOCK_VOLUME_PATH/storage.json" ] || {
+    echo 'Default uninstall removed user data from the Docker volume.' >&2
+    exit 1
+}
+if grep -Eq '^volume rm sub-store-data$' "$DOCKER_LOG"; then
+    echo 'Default uninstall attempted to remove the Docker data volume.' >&2
+    exit 1
+fi
+
+MOCK_VOLUME_PATH="$TEST_DIR/uninstall-explicit/_data"
+mkdir -p "$MOCK_VOLUME_PATH"
+printf '%s\n' 'explicit keep-data' > "$MOCK_VOLUME_PATH/storage.json"
+: > "$DOCKER_LOG"
+uninstall_plugin --keep-data
+[ -f "$MOCK_VOLUME_PATH/storage.json" ] || {
+    echo '--keep-data uninstall removed user data from the Docker volume.' >&2
+    exit 1
+}
+if grep -Eq '^volume rm sub-store-data$' "$DOCKER_LOG"; then
+    echo '--keep-data uninstall attempted to remove the Docker data volume.' >&2
+    exit 1
+fi
+
+MOCK_VOLUME_PATH="$TEST_DIR/uninstall-delete/_data"
+mkdir -p "$MOCK_VOLUME_PATH"
+printf '%s\n' 'explicit delete' > "$MOCK_VOLUME_PATH/storage.json"
+: > "$DOCKER_LOG"
+uninstall_plugin --delete-data
+[ ! -e "$MOCK_VOLUME_PATH" ] || {
+    echo '--delete-data uninstall did not remove the requested Docker data volume.' >&2
+    exit 1
+}
+grep -Fxq 'volume rm sub-store-data' "$DOCKER_LOG"
+MOCK_VOLUME_PATH="$INITIAL_MOCK_VOLUME_PATH"
+
 copy_volume_path="$TEST_DIR/copy-volume"
 mkdir -p "$copy_volume_path"
 if ln -s "$copy_volume_path" "$TEST_DIR/copy-volume-alias" 2>/dev/null &&
