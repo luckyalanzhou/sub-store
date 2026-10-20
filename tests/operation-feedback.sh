@@ -69,6 +69,21 @@ assert_operation_snapshot() {
     [ "$(sed -n '3p' "$TMP/state/snapshot")" = "$expected_action" ]
     [ "$(sed -n '4p' "$TMP/state/snapshot")" = "$expected_phase" ]
 }
+report_worker_timeout() {
+    state_dir="$1"
+    echo "Timed out waiting for the operation worker in $state_dir." >&2
+    for state_file in phase status snapshot output.log; do
+        if [ -f "$state_dir/$state_file" ]; then
+            printf '%s:\n' "$state_file" >&2
+            cat "$state_dir/$state_file" >&2
+        fi
+    done
+    worker_pid="$(cat "$state_dir/lock/pid" 2>/dev/null || true)"
+    case "$worker_pid" in
+        ''|*[!0-9]*) ;;
+        *) ps -o pid,ppid,stat,args -p "$worker_pid" >&2 || true ;;
+    esac
+}
 export SLOW_UPDATE="$TMP/slow-update"
 export INTERRUPT_UPDATE="$TMP/interrupt-update"
 export COMMAND_PID_FILE="$TMP/interrupted-command.pid"
@@ -210,9 +225,22 @@ run_sh "$TMP/job" --enqueue restart
 grep -q running "$TMP/state/phase"
 if run_sh "$TMP/job" --enqueue stop; then exit 1; fi
 attempt=0
+while ! grep -q 'operation output: restart' "$TMP/state/output.log"; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 10 ]; then
+        report_worker_timeout "$TMP/state"
+        echo 'Operation output was not visible before the worker exited.' >&2
+        exit 1
+    fi
+    sleep 0.05
+done
+attempt=0
 while [ -d "$TMP/state/lock" ]; do
     attempt=$((attempt + 1))
-    [ "$attempt" -lt 30 ]
+    if [ "$attempt" -ge 10 ]; then
+        report_worker_timeout "$TMP/state"
+        exit 1
+    fi
     sleep 1
 done
 grep -q success "$TMP/state/phase"

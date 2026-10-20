@@ -123,7 +123,7 @@ run_job() {
         exec 3< "$STATE/output.pipe"
         while :; do
             previous_size="$log_size"
-            dd of="$STATE/output.log" bs=16384 count=1 iflag=fullblock \
+            dd of="$STATE/output.log" bs=65536 count=1 \
                 oflag=append conv=notrunc <&3 2>/dev/null || break
             log_size="$(stat -c '%s' "$STATE/output.log" 2>/dev/null)" || break
             [ -n "$log_size" ] && [ "$log_size" -gt "$previous_size" ] || break
