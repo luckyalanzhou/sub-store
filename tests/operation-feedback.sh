@@ -36,9 +36,13 @@ EOF
 cat > "$TMP/bin/stat" <<'EOF'
 #!/bin/sh
 if [ -n "${FAKE_STATE_OWNER:-}" ] && [ "$#" -eq 3 ] &&
-    [ "$1" = "-c" ] && [ "$2" = "%u" ] && [ "$3" = "$STATE_TO_CHECK" ]; then
-    printf '%s\n' "$FAKE_STATE_OWNER"
-    exit 0
+    [ "$1" = "-c" ] && [ "$2" = "%u" ]; then
+    case "$3" in
+        */foreign-state)
+            printf '%s\n' "$FAKE_STATE_OWNER"
+            exit 0
+            ;;
+    esac
 fi
 if [ "${BUSYBOX_TEST:-0}" = "1" ]; then
     exec busybox stat "$@"
@@ -79,7 +83,6 @@ mkdir -p "$TMP/foreign-state"
 sed -e "s|STATE=/tmp/sub-store-operation|STATE=$TMP/foreign-state|" \
     -e "s|/usr/bin/sub-storectl|$TMP/ctl|" \
     "$ROOT/installer/payload/root/usr/lib/sub-store/job.sh" > "$TMP/foreign-job"
-export STATE_TO_CHECK="$TMP/foreign-state"
 export FAKE_STATE_OWNER=99999
 if run_sh "$TMP/foreign-job" start > "$TMP/foreign-output" 2>&1; then
     echo 'A foreign-owned operation state directory was accepted.' >&2

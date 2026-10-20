@@ -184,6 +184,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.options.api_path.validate('main', 'a'.repeat(48)), true);
     assert.notEqual(t.options.api_path.validate('main', 'z'.repeat(48)), true);
     assert.notEqual(t.options.access_host.validate('main', 'http://router:3001'), true);
+    assert.notEqual(t.options.access_host.validate('main', 'a'.repeat(254)), true);
     assert.equal(t.options.public_url.validate('main', 'https://sub.example.test'), true);
     assert.notEqual(t.options.public_url.validate('main', 'https://bad..example.test'), true);
     assert.match(source, /document\.hidden/);
@@ -285,15 +286,21 @@ test('image-only update does not reload the LuCI page', async () => {
         else global.window = previousWindow;
     }
 });
-test('save-and-apply commits, enqueues restart and applies staged LuCI changes', async () => {
+test('save-and-apply commits page settings and restarts without global UCI apply', async () => {
     const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
     await t.view.handleSaveApply();
     const index = name => t.calls.findIndex(call => call[0] === name);
     assert.ok(index('save') < index('commit'));
     assert.ok(index('commit') < index('/usr/lib/sub-store/job.sh'));
-    assert.ok(index('/usr/lib/sub-store/job.sh') < index('apply'));
     assert.deepEqual(t.calls[index('/usr/lib/sub-store/job.sh')][1], ['--enqueue', 'restart']);
-    assert.equal(t.calls.filter(call => call[0] === 'apply').length, 1);
+    assert.equal(t.calls.filter(call => call[0] === 'apply').length, 0);
+});
+test('save-only commits settings without restarting the service', async () => {
+    const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
+    await t.view.handleSave();
+    const index = name => t.calls.findIndex(call => call[0] === name);
+    assert.ok(index('save') < index('commit'));
+    assert.equal(t.calls.some(call => call[0].endsWith('job.sh') || call[0] === 'apply'), false);
 });
 test('invalid settings prevent commit and service restart', async () => {
     const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;

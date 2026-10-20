@@ -127,6 +127,11 @@ if (BACKEND_PORT=8081; valid_config) >/dev/null 2>&1; then
     echo 'Equal frontend and backend ports were accepted.' >&2
     exit 1
 fi
+long_access_host="$(awk 'BEGIN { for (i = 0; i < 254; i++) printf "a" }')"
+if (ACCESS_HOST="$long_access_host"; valid_config) >/dev/null 2>&1; then
+    echo 'An access hostname longer than 253 characters was accepted.' >&2
+    exit 1
+fi
 expected="http://$ACCESS_HOST:8081/?api=http%3A%2F%2F$ACCESS_HOST%3A8081%2F$API_PATH"
 [ "$(show_url)" = "$expected" ]
 [ "$(show_api_url)" = "http://$ACCESS_HOST:8080/$API_PATH" ]

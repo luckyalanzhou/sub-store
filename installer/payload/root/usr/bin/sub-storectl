@@ -69,6 +69,7 @@ valid_config() {
             fail "access host must be a hostname or IPv4 address without protocol or port"
             ;;
     esac
+    [ "${#ACCESS_HOST}" -le 253 ] || fail "access host must not exceed 253 characters"
 
     if [ -n "$PUBLIC_URL" ]; then
         printf '%s\n' "$PUBLIC_URL" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^?#[:space:]]*)?$' ||
