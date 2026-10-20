@@ -27,9 +27,27 @@ fi
 EOF
 chmod +x "$TMP/ctl"
 mkdir "$TMP/bin"
-REAL_CHMOD="$(command -v chmod)"
-REAL_STAT="$(command -v stat)"
-REAL_DD="$(command -v dd)"
+resolve_command() {
+    resolve_name="$1"
+    resolve_previous_ifs="$IFS"
+    IFS=:
+    for resolve_dir in $PATH; do
+        [ -n "$resolve_dir" ] || resolve_dir=.
+        if [ -x "$resolve_dir/$resolve_name" ] && [ ! -d "$resolve_dir/$resolve_name" ]; then
+            case "$resolve_dir" in
+                /*) printf '%s/%s\n' "${resolve_dir%/}" "$resolve_name" ;;
+                *) printf '%s/%s/%s\n' "$PWD" "$resolve_dir" "$resolve_name" ;;
+            esac
+            IFS="$resolve_previous_ifs"
+            return 0
+        fi
+    done
+    IFS="$resolve_previous_ifs"
+    return 1
+}
+REAL_CHMOD="$(resolve_command chmod)"
+REAL_STAT="$(resolve_command stat)"
+REAL_DD="$(resolve_command dd)"
 cat > "$TMP/bin/dd" <<'EOF'
 #!/bin/sh
 if [ "${BUSYBOX_TEST:-0}" = "1" ]; then
