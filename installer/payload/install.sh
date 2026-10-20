@@ -66,10 +66,17 @@ fail() {
     exit 1
 }
 
-is_supported_release() {
+is_target_release() {
     case "$1" in
-        24.10*|25.12*) return 0 ;;
+        24.10|25.12) return 0 ;;
+        24.10.*) release_patch=${1#24.10.} ;;
+        25.12.*) release_patch=${1#25.12.} ;;
         *) return 1 ;;
+    esac
+
+    case "$release_patch" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
     esac
 }
 
@@ -215,8 +222,8 @@ PLUGIN_ONLY="${SUB_STORE_PLUGIN_ONLY:-0}"
 
 if [ -r /etc/openwrt_release ]; then
     . /etc/openwrt_release
-    is_supported_release "${DISTRIB_RELEASE:-}" ||
-        say "WARNING: tested on iStoreOS 24.10.x and 25.12.x; detected ${DISTRIB_RELEASE:-unknown}. Continuing with best-effort compatibility."
+    is_target_release "${DISTRIB_RELEASE:-}" ||
+        say "WARNING: target releases are iStoreOS 24.10.x and 25.12.x; detected ${DISTRIB_RELEASE:-unknown}. Continuing with best-effort compatibility."
 fi
 
 if [ "$PLUGIN_ONLY" = "1" ]; then

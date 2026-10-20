@@ -11,7 +11,7 @@ Sub-Store 的 LuCI 管理插件，使用官方 [`xream/sub-store`](https://hub.d
 
 ## 下载与安装
 
-安装包支持 **iStoreOS 24.10（opkg）和 25.12（apk）**，需联网安装依赖并拉取镜像。
+安装器目标为 **iStoreOS 24.10（opkg）和 25.12（apk）**；自动化测试覆盖两种包管理器，实机安装尚未验证。首次安装需联网安装依赖并拉取镜像。
 
 1. 从 [Releases](https://github.com/luckyalanzhou/sub-store/releases/latest) 下载 `.run` 安装包。
 2. 在 **iStore → 手动安装** 中上传并安装。

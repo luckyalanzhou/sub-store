@@ -111,7 +111,7 @@ jobs:
           mkdir -p dist
           {
             printf '# sub-store v%s\n\n' "$VERSION"
-            printf '安装包：适用于 iStoreOS 24.10（opkg）和 25.12（apk）的 `.run` 自解压安装器，附 SHA-256 校验文件。首次启动需要联网拉取官方镜像。\n\n'
+            printf '安装器目标版本：iStoreOS 24.10（opkg）和 25.12（apk）。提供 `.run` 自解压安装器和 SHA-256 校验文件；首次启动需要联网拉取官方镜像。\n\n'
             printf '## 优化内容\n\n'
             index=0
             if [[ -n "$PREVIOUS_TAG" ]]; then

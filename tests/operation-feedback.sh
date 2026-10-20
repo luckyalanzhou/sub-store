@@ -148,12 +148,13 @@ for state_file in action phase status snapshot output.log output.pipe snapshot.9
 done
 : > "$CHMOD_LOG"
 run_sh "$TMP/job" clear-runtime-logs
-grep -Fxq "700 $TMP/state" "$CHMOD_LOG" || {
-    echo 'The operation state directory was not secured to mode 700.' >&2
-    exit 1
-}
 case "$(uname -s)" in
-    MINGW*|MSYS*) ;;
+    MINGW*|MSYS*)
+        grep -Fxq "700 $TMP/state" "$CHMOD_LOG" || {
+            echo 'The operation state directory was not secured to mode 700.' >&2
+            exit 1
+        }
+        ;;
     *) [ "$(stat -c '%a' "$TMP/state")" = 700 ] || {
         echo 'The operation state directory permissions are too broad.' >&2
         exit 1

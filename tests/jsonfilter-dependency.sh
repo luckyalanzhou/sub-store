@@ -11,7 +11,7 @@ mkdir -p "$MOCK_BIN" "$APK_BIN"
 export MOCK_BIN APK_BIN MOCK_LOG
 
 awk '
-    /^is_supported_release\(\) \{/ { copy=1 }
+    /^is_target_release\(\) \{/ { copy=1 }
     copy { print }
     copy && /^ensure_jsonfilter\(\) \{/ { last_function=1 }
     copy && last_function && /^\}$/ { exit }
@@ -21,12 +21,14 @@ awk '
 say() { printf '%s\n' "$*" >> "$TEST_DIR/messages"; }
 fail() { say "ERROR: $*"; exit 1; }
 
-is_supported_release 24.10.5
-is_supported_release 25.12.0
-if is_supported_release 25.10.0; then
-    echo 'An unverified release was marked as supported.' >&2
-    exit 1
-fi
+is_target_release 24.10.5
+is_target_release 25.12.0
+for version in 24.100.5 25.120.0 24.10x 25.12foo 24.10.5foo 25.12.0-rc1 25.10.0; do
+    if is_target_release "$version"; then
+        echo "A non-target release was marked as a target: $version" >&2
+        exit 1
+    fi
+done
 
 mkdir -p "$TEST_DIR/no-manager-bin"
 if (PATH="$TEST_DIR/no-manager-bin" detect_package_manager); then
