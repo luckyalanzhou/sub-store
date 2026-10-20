@@ -53,11 +53,12 @@ case "$1" in
         done
         ;;
     status)
-        if [ "${MOCK_OPKG_INSTALLED:-0}" = 1 ]; then
-            printf 'Package: %s\nStatus: install user installed\n' "$2"
-        else
-            exit 1
-        fi
+        case "${MOCK_OPKG_STATUS:-installed}" in
+            installed) printf 'Package: %s\nStatus: install user installed\n' "$2" ;;
+            user-not-installed) printf 'Package: %s\nStatus: install user not-installed\n' "$2" ;;
+            unknown-not-installed) printf 'Package: %s\nStatus: unknown ok not-installed\n' "$2" ;;
+            *) exit 1 ;;
+        esac
         ;;
 esac
 EOF
@@ -74,14 +75,16 @@ cmp "$TEST_DIR/expected.log" "$MOCK_LOG"
 
 ensure_jsonfilter
 cmp "$TEST_DIR/expected.log" "$MOCK_LOG"
-MOCK_OPKG_INSTALLED=1
-export MOCK_OPKG_INSTALLED
+MOCK_OPKG_STATUS=installed
+export MOCK_OPKG_STATUS
 package_is_installed rpcd-mod-file
-MOCK_OPKG_INSTALLED=0
-if package_is_installed rpcd-mod-file; then
-    echo 'An uninstalled opkg package was reported as installed.' >&2
-    exit 1
-fi
+for MOCK_OPKG_STATUS in user-not-installed unknown-not-installed; do
+    export MOCK_OPKG_STATUS
+    if package_is_installed rpcd-mod-file; then
+        echo "An opkg package with status '$MOCK_OPKG_STATUS' was reported as installed." >&2
+        exit 1
+    fi
+done
 
 rm -f "$MOCK_BIN/jsonfilter"
 : > "$MOCK_LOG"

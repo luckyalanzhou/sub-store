@@ -101,7 +101,7 @@ package_manager_install() {
 
 package_is_installed() {
     case "$PACKAGE_MANAGER" in
-        opkg) opkg status "$1" 2>/dev/null | grep -q 'Status:.*installed' ;;
+        opkg) opkg status "$1" 2>/dev/null | grep -q '^Status:.*[[:space:]]installed[[:space:]]*$' ;;
         apk) apk info 2>/dev/null | grep -Fxq -- "$1" ;;
         *) fail "No supported package manager has been selected." ;;
     esac
