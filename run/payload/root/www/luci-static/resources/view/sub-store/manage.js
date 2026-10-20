@@ -64,6 +64,7 @@ return view.extend({
         if (this.enqueuePendingAction !== action) return false;
         this.enqueuePendingAction = null;
         this.enqueuePreviousOperation = null;
+        this.enqueuePreviousOperationId = null;
         this.enqueueRequestError = null;
         this.enqueueRequestTimedOut = false;
         this.enqueueStatusMisses = 0;
@@ -92,7 +93,9 @@ return view.extend({
                 this.awaitingTaskDetails = false;
             }
             const pendingAction = this.enqueuePendingAction;
-            const operationChanged = s.operation && s.operation !== this.enqueuePreviousOperation;
+            const operationChanged = s.operation_id
+                ? s.operation_id !== this.enqueuePreviousOperationId
+                : s.operation && s.operation !== this.enqueuePreviousOperation;
             const taskStarted = pendingAction && s.action === pendingAction && (s.busy || operationChanged);
             const pluginUpdateInstalled = this.updateAction === 'update-all' &&
                 s.action === 'update-all' && !s.busy && s.phase !== 'running' &&
@@ -252,6 +255,7 @@ return view.extend({
         }
         this.enqueuePendingAction = action;
         this.enqueuePreviousOperation = (this.state && this.state.operation) || '';
+        this.enqueuePreviousOperationId = (this.state && this.state.operation_id) || '';
         this.enqueueRequestError = null;
         this.setBusy(true);
         this.awaitingTaskDetails = true;

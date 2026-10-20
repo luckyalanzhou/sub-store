@@ -8,6 +8,7 @@ if [ "$MODE" = "--enqueue" ] || [ "$MODE" = "--worker" ]; then
 else
     ACTION="$MODE"
 fi
+OPERATION_ID="${3:-}"
 case "$ACTION" in
     start|stop|restart|update|update-all|rotate-key|check-plugin-update|install-plugin-update|logs|clear-runtime-logs|clear-maintenance-logs) ;;
     *) echo "Unsupported action" >&2; exit 1 ;;
@@ -18,12 +19,35 @@ if [ "$MODE" = "--enqueue" ] && ! command -v nohup >/dev/null 2>&1; then
 fi
 STATE=/tmp/sub-store-operation
 mkdir -p "$STATE"
+write_operation_state() {
+    phase="$1"
+    message="$2"
+    snapshot_tmp="$STATE/snapshot.$$"
+    {
+        printf '%s\n' sub-store-operation-v1
+        printf '%s\n' "$OPERATION_ID"
+        printf '%s\n' "$ACTION"
+        printf '%s\n' "$phase"
+        printf '%s\n' "$message"
+    } > "$snapshot_tmp"
+    printf '%s\n' "$ACTION" > "$STATE/action"
+    printf '%s\n' "$phase" > "$STATE/phase"
+    printf '%s\n' "$message" > "$STATE/status"
+    mv -f "$snapshot_tmp" "$STATE/snapshot"
+}
 if [ "$MODE" = "--worker" ]; then
     [ -d "$STATE/lock" ] || { echo "No queued operation." >&2; exit 1; }
     [ "$(cat "$STATE/action" 2>/dev/null)" = "$ACTION" ] || {
         echo "Queued operation does not match." >&2
         exit 1
     }
+    queued_operation_id="$(sed -n '2p' "$STATE/snapshot" 2>/dev/null || true)"
+    if [ -n "$OPERATION_ID" ] && [ "$queued_operation_id" != "$OPERATION_ID" ]; then
+        echo "Queued operation ID does not match." >&2
+        exit 1
+    fi
+    OPERATION_ID="$queued_operation_id"
+    [ -n "$OPERATION_ID" ] || { echo "Queued operation has no ID." >&2; exit 1; }
     printf '%s\n' "$$" > "$STATE/lock/pid"
 else
     if ! mkdir "$STATE/lock" 2>/dev/null; then
@@ -45,15 +69,14 @@ else
     fi
     printf '%s\n' "$$" > "$STATE/lock/pid"
     trap 'rm -f "$STATE/lock/pid"; rmdir "$STATE/lock" 2>/dev/null || true' EXIT
-    printf '%s\n' "$ACTION" > "$STATE/action"
-    printf '%s\n' running > "$STATE/phase"
+    OPERATION_ID="$(date '+%s')-$$"
     : > "$STATE/output.log"
-    printf '正在执行：%s；开始时间：%s\n' "$ACTION" "$(date '+%Y-%m-%d %H:%M:%S')" > "$STATE/status"
+    write_operation_state running "正在执行：$ACTION；开始时间：$(date '+%Y-%m-%d %H:%M:%S')"
 fi
 run_job() {
     trap 'rm -f "$STATE/lock/pid"; rmdir "$STATE/lock" 2>/dev/null || true' EXIT
-    trap 'printf "%s\n" interrupted > "$STATE/phase"; exit 130' INT
-    trap 'printf "%s\n" interrupted > "$STATE/phase"; exit 143' TERM
+    trap 'write_operation_state interrupted "操作已中断"; exit 130' INT
+    trap 'write_operation_state interrupted "操作已中断"; exit 143' TERM
     COMMAND=/usr/bin/sub-storectl
     set -- "$ACTION"
     trim_operation_log() {
@@ -81,8 +104,7 @@ run_job() {
 
     if ! mkfifo "$STATE/output.pipe" 2>/dev/null; then
         echo "Cannot create a pipe for bounded operation logging." > "$STATE/output.log"
-        printf '操作失败：%s；无法建立有大小限制的日志流。\n' "$ACTION" > "$STATE/status"
-        printf '%s\n' failed > "$STATE/phase"
+        write_operation_state failed "操作失败：$ACTION；无法建立有大小限制的日志流。"
         exit 1
     fi
     consume_operation_output &
@@ -96,17 +118,15 @@ run_job() {
     rm -f "$STATE/output.pipe"
     trim_operation_log || true
     if [ "$result" -eq 0 ]; then
-        printf '操作成功：%s；完成时间：%s\n' "$ACTION" "$(date '+%Y-%m-%d %H:%M:%S')" > "$STATE/status"
-        printf '%s\n' success > "$STATE/phase"
+        write_operation_state success "操作成功：$ACTION；完成时间：$(date '+%Y-%m-%d %H:%M:%S')"
     else
-        printf '操作失败：%s；退出码：%s；请查看日志与诊断。\n' "$ACTION" "$result" > "$STATE/status"
-        printf '%s\n' failed > "$STATE/phase"
+        write_operation_state failed "操作失败：$ACTION；退出码：$result；请查看日志与诊断。"
         exit "$result"
     fi
 }
 if [ "$MODE" = "--enqueue" ]; then
     # Detach the worker so rpcd's file.exec request returns before Docker finishes.
-    nohup /bin/sh "$0" --worker "$ACTION" </dev/null >/dev/null 2>&1 &
+    nohup /bin/sh "$0" --worker "$ACTION" "$OPERATION_ID" </dev/null >/dev/null 2>&1 &
     worker_pid=$!
     if [ -d "$STATE/lock" ]; then
         printf '%s\n' "$worker_pid" > "$STATE/lock/pid" 2>/dev/null || true

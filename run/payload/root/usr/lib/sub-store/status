@@ -8,6 +8,21 @@ local function read(path)
     f:close()
     return value:gsub("%s+$", "")
 end
+local function operation_snapshot()
+    local f = io.open("/tmp/sub-store-operation/snapshot", "r")
+    if not f then return nil end
+    local version = f:read("*l")
+    local id = f:read("*l")
+    local action = f:read("*l")
+    local phase = f:read("*l")
+    local operation = f:read("*l") or ""
+    f:close()
+    if version ~= "sub-store-operation-v1" or not id or id == "" or
+        not action or action == "" or not phase or phase == "" then
+        return nil
+    end
+    return { id = id, action = action, phase = phase, operation = operation }
+end
 local function command(value)
     return (sys.exec("( " .. value .. " ) 2>/dev/null") or ""):gsub("%s+$", "")
 end
@@ -15,12 +30,14 @@ local state = "/tmp/sub-store-operation/"
 local plugin_update = "/tmp/sub-store-plugin-update/"
 local mode = arg[1] or "summary"
 local busy = sys.call("[ -d /tmp/sub-store-operation/lock ] && grep -Eq '^[1-9][0-9]*$' /tmp/sub-store-operation/lock/pid 2>/dev/null && kill -0 \"$(cat /tmp/sub-store-operation/lock/pid 2>/dev/null)\" 2>/dev/null") == 0
+local operation = operation_snapshot()
 local result = {
     container = busy and "maintenance" or command("/usr/bin/sub-storectl status"),
     version = read("/etc/sub-store/version"),
-    phase = read(state .. "phase"),
-    action = read(state .. "action"),
-    operation = read(state .. "status"),
+    operation_id = operation and operation.id or "",
+    phase = operation and operation.phase or read(state .. "phase"),
+    action = operation and operation.action or read(state .. "action"),
+    operation = operation and operation.operation or read(state .. "status"),
     busy = busy
 }
 -- Docker CLI calls can stall while dockerd pulls or replaces an image. Keep
