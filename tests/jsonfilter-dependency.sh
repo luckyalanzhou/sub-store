@@ -89,6 +89,7 @@ for MOCK_OPKG_STATUS in user-not-installed unknown-not-installed; do
 done
 
 rm -f "$MOCK_BIN/jsonfilter"
+hash -r
 : > "$MOCK_LOG"
 if (MOCK_FAIL_UPDATE=1 ensure_jsonfilter); then
     echo 'A failed opkg update was accepted.' >&2
