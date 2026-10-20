@@ -119,19 +119,17 @@ run_job() {
     }
 
     consume_operation_output() {
-        chunk="$STATE/output.chunk.$$"
         log_size=0
         exec 3< "$STATE/output.pipe"
         while :; do
-            dd of="$chunk" bs=16384 count=1 iflag=fullblock <&3 2>/dev/null || break
-            chunk_size="$(stat -c '%s' "$chunk" 2>/dev/null)" || break
-            [ -n "$chunk_size" ] && [ "$chunk_size" -gt 0 ] || break
-            cat "$chunk" >> "$STATE/output.log" || break
-            log_size=$((log_size + chunk_size))
+            previous_size="$log_size"
+            dd of="$STATE/output.log" bs=16384 count=1 iflag=fullblock \
+                oflag=append conv=notrunc <&3 2>/dev/null || break
+            log_size="$(stat -c '%s' "$STATE/output.log" 2>/dev/null)" || break
+            [ -n "$log_size" ] && [ "$log_size" -gt "$previous_size" ] || break
             trim_operation_log || true
         done
         exec 3<&-
-        rm -f "$chunk"
     }
 
     if ! mkfifo "$STATE/output.pipe" 2>/dev/null; then
