@@ -122,7 +122,7 @@ run_job() {
         chunk="$STATE/output.chunk.$$"
         exec 3< "$STATE/output.pipe"
         while :; do
-            dd of="$chunk" bs=4096 count=1 iflag=fullblock <&3 2>/dev/null || break
+            dd of="$chunk" bs=16384 count=1 iflag=fullblock <&3 2>/dev/null || break
             chunk_size="$(wc -c < "$chunk" | tr -d '[:space:]')"
             [ -n "$chunk_size" ] && [ "$chunk_size" -gt 0 ] || break
             cat "$chunk" >> "$STATE/output.log" || break
