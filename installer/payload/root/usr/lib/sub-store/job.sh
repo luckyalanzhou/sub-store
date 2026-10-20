@@ -18,11 +18,35 @@ if [ "$MODE" = "--enqueue" ] && ! command -v nohup >/dev/null 2>&1; then
     exit 1
 fi
 STATE=/tmp/sub-store-operation
+if [ -L "$STATE" ]; then
+    echo "Operation state directory is not trusted." >&2
+    exit 1
+fi
 mkdir -p "$STATE"
+if [ -L "$STATE" ] || [ ! -d "$STATE" ]; then
+    echo "Operation state directory is not trusted." >&2
+    exit 1
+fi
+state_uid="$(stat -c '%u' "$STATE" 2>/dev/null)" || {
+    echo "Cannot verify operation state directory ownership." >&2
+    exit 1
+}
+current_uid="$(id -u)" || {
+    echo "Cannot verify operation state directory ownership." >&2
+    exit 1
+}
+if [ "$state_uid" != "$current_uid" ]; then
+    echo "Operation state directory is not trusted." >&2
+    exit 1
+fi
+chmod 700 "$STATE" || {
+    echo "Cannot secure operation state directory." >&2
+    exit 1
+}
 write_operation_state() {
     phase="$1"
     message="$2"
-    snapshot_tmp="$STATE/snapshot.$$"
+    snapshot_tmp="$(mktemp "$STATE/snapshot.XXXXXX")" || return 1
     {
         printf '%s\n' sub-store-operation-v1
         printf '%s\n' "$OPERATION_ID"
@@ -35,6 +59,10 @@ write_operation_state() {
     printf '%s\n' "$message" > "$STATE/status"
     mv -f "$snapshot_tmp" "$STATE/snapshot"
 }
+if [ -L "$STATE/lock" ] || [ -L "$STATE/lock/pid" ]; then
+    echo "Operation lock is not trusted." >&2
+    exit 1
+fi
 if [ "$MODE" = "--worker" ]; then
     [ -d "$STATE/lock" ] || { echo "No queued operation." >&2; exit 1; }
     [ "$(cat "$STATE/action" 2>/dev/null)" = "$ACTION" ] || {
@@ -69,6 +97,8 @@ else
     fi
     printf '%s\n' "$$" > "$STATE/lock/pid"
     trap 'rm -f "$STATE/lock/pid"; rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+    rm -f "$STATE/action" "$STATE/phase" "$STATE/status" "$STATE/snapshot" \
+        "$STATE"/snapshot.* "$STATE/output.log" "$STATE/output.pipe" "$STATE"/output.chunk.*
     OPERATION_ID="$(date '+%s')-$$"
     : > "$STATE/output.log"
     write_operation_state running "正在执行：$ACTION；开始时间：$(date '+%Y-%m-%d %H:%M:%S')"

@@ -5,6 +5,8 @@ Thumbs.db
 !.env.example
 dist/
 /AGENTS.md
+/.agents/
+/.codex/
 /.tmp-validation/
 *.run
 *.tar.gz

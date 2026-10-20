@@ -137,6 +137,29 @@ volume_is_empty() {
     [ -z "$volume_entries" ]
 }
 
+copy_paths_do_not_overlap() {
+    copy_source_real_path="$(cd -P "$1" 2>/dev/null && pwd -P)" || {
+        echo "could not resolve the existing data directory: $1" >&2
+        return 1
+    }
+    copy_volume_real_path="$(cd -P "$VOLUME_PATH" 2>/dev/null && pwd -P)" || {
+        echo "could not resolve the Docker data volume path" >&2
+        return 1
+    }
+    case "$copy_volume_real_path/" in
+        "$copy_source_real_path/"*)
+            echo "Docker volume is inside the existing data directory; refusing recursive copy" >&2
+            return 1
+            ;;
+    esac
+    case "$copy_source_real_path/" in
+        "$copy_volume_real_path/"*)
+            echo "existing data directory is inside the Docker volume; refusing recursive copy" >&2
+            return 1
+            ;;
+    esac
+}
+
 copy_directory_to_volume() {
     source_path="$1"
     case "$source_path" in
@@ -149,12 +172,7 @@ copy_directory_to_volume() {
             return 1 ;;
     esac
     [ -d "$source_path" ] || { echo "legacy data directory does not exist: $source_path" >&2; return 1; }
-    case "$VOLUME_PATH/" in
-        "$source_path/"*) echo "Docker volume is inside the legacy data directory; refusing recursive copy" >&2; return 1 ;;
-    esac
-    case "$source_path/" in
-        "$VOLUME_PATH/"*) echo "legacy data directory is inside the Docker volume; refusing recursive copy" >&2; return 1 ;;
-    esac
+    copy_paths_do_not_overlap "$source_path" || return 1
     volume_is_empty "$VOLUME_PATH" || { echo "Docker volume $DATA_VOLUME is not empty; refusing to overwrite existing data" >&2; return 1; }
     if ! cp -a "$source_path"/. "$VOLUME_PATH"/; then
         docker volume rm "$DATA_VOLUME" >/dev/null 2>&1 ||
@@ -528,12 +546,17 @@ cleanup_replaced_image() {
     printf '%s\n' "$cleanup_current_image" | grep -Eq '^sha256:[0-9a-f]{64}$' || return 0
     [ "$PREVIOUS_IMAGE_ID" != "$cleanup_current_image" ] || return 0
 
-    cleanup_refs="$(docker image inspect -f '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' "$PREVIOUS_IMAGE_ID" 2>/dev/null)" || {
+    cleanup_refs="$(docker image inspect -f '{{range .RepoTags}}{{println "tag" .}}{{end}}{{range .RepoDigests}}{{println "digest" .}}{{end}}' "$PREVIOUS_IMAGE_ID" 2>/dev/null)" || {
         echo "WARNING: Could not inspect the old image; cleanup was skipped." >&2
         return 0
     }
-    # Preserve images also named by the user or another repository.
-    if printf '%s\n' "$cleanup_refs" | grep -Ev '^(|(docker\.io/)?xream/sub-store(:[^[:space:]]+|@sha256:[0-9a-f]{64}))$' >/dev/null; then
+    # A remaining tag may be an intentional backup tag, even if it uses the official repository name.
+    if printf '%s\n' "$cleanup_refs" | grep -q '^tag '; then
+        echo "Old image still has repository tags; keeping it."
+        return 0
+    fi
+    # Preserve digest references from other repositories.
+    if printf '%s\n' "$cleanup_refs" | grep -Ev '^(|(digest )((docker\.io/)?xream/sub-store@sha256:[0-9a-f]{64}))$' >/dev/null; then
         echo "Old image has other repository references; keeping it."
         return 0
     fi
@@ -554,6 +577,7 @@ cleanup_replaced_image() {
 }
 
 rollback_replacement() {
+    trap - HUP INT TERM
     if docker inspect sub-store >/dev/null 2>&1; then
         docker rm -f sub-store >/dev/null 2>&1 || true
     fi
@@ -576,6 +600,27 @@ rollback_replacement() {
     restore_previous_image_tag || true
 }
 
+handle_replacement_signal() {
+    replacement_signal_status="$1"
+    trap - HUP INT TERM
+
+    if [ "$HAD_OLD_CONTAINER" = "1" ] && [ "$REPLACEMENT_COMMITTED" != "1" ]; then
+        if [ -n "$BACKUP_NAME" ] && docker inspect "$BACKUP_NAME" >/dev/null 2>&1; then
+            rollback_replacement
+        elif docker inspect sub-store >/dev/null 2>&1; then
+            if [ "$OLD_WAS_RUNNING" = "1" ] &&
+                ! docker inspect -f '{{.State.Running}}' sub-store 2>/dev/null | grep -qx true; then
+                docker start sub-store >/dev/null 2>&1 ||
+                    echo "WARNING: The previous container remains stopped after interruption; start it manually." >&2
+            fi
+            restore_previous_settings || echo "WARNING: Could not restore the prior UCI settings." >&2
+            restore_previous_image_tag || true
+        fi
+    fi
+
+    exit "$replacement_signal_status"
+}
+
 replace_container() {
     render_config
     daemon_ready
@@ -588,6 +633,7 @@ replace_container() {
 
     HAD_OLD_CONTAINER=0
     OLD_WAS_RUNNING=0
+    REPLACEMENT_COMMITTED=0
     BACKUP_NAME=""
     PREVIOUS_MOUNT_TYPE=""
     PREVIOUS_MOUNT_NAME=""
@@ -676,16 +722,14 @@ replace_container() {
                         fail "existing data mount source cannot be safely migrated: $COPY_SOURCE"
                         ;;
                 esac
-                case "$VOLUME_PATH/" in
-                    "$COPY_SOURCE/"*) restore_previous_settings; fail "Docker volume is nested inside the existing data directory; refusing recursive copy" ;;
-                esac
-                case "$COPY_SOURCE/" in
-                    "$VOLUME_PATH/"*) restore_previous_settings; fail "existing data directory is nested inside the Docker volume; refusing recursive copy" ;;
-                esac
                 [ -d "$COPY_SOURCE" ] || {
                     restore_previous_settings
                     fail "existing data mount source does not exist: $COPY_SOURCE"
                 }
+                if ! copy_paths_do_not_overlap "$COPY_SOURCE"; then
+                    restore_previous_settings
+                    fail "existing data paths overlap; refusing recursive copy"
+                fi
             fi
         fi
     fi
@@ -719,6 +763,10 @@ replace_container() {
             suffix=$((suffix + 1))
             BACKUP_NAME="sub-store-rollback-$$-$suffix"
         done
+
+        trap 'handle_replacement_signal 129' HUP
+        trap 'handle_replacement_signal 130' INT
+        trap 'handle_replacement_signal 143' TERM
 
         if [ "$OLD_WAS_RUNNING" = "1" ]; then
             if ! docker stop sub-store >/dev/null; then
@@ -754,6 +802,7 @@ replace_container() {
             rollback_replacement
             fail "new container was healthy, but its verified image digest could not be saved; the previous container was restored when available"
         fi
+        REPLACEMENT_COMMITTED=1
         if [ "$HAD_OLD_CONTAINER" = "1" ]; then
             if ! docker rm "$BACKUP_NAME" >/dev/null 2>&1; then
                 echo "WARNING: New container is running, but the stopped rollback container $BACKUP_NAME could not be removed." >&2
@@ -761,9 +810,11 @@ replace_container() {
                 cleanup_replaced_image
             fi
         fi
+        trap - HUP INT TERM
         return 0
     fi
 
+    trap - HUP INT TERM
     rollback_replacement
     fail "new container failed to start; the previous container has been restored when available"
 }
@@ -824,6 +875,23 @@ show_app_version() {
 }
 
 export_data() {
+    temp_target=""
+    paused=0
+    cleanup_export() {
+        if [ "$paused" = "1" ]; then
+            paused=0
+            docker unpause sub-store >/dev/null ||
+                echo "WARNING: Could not unpause sub-store during export cleanup. Start it manually." >&2
+        fi
+        if [ -n "$temp_target" ] && [ -e "$temp_target" ]; then
+            rm -f "$temp_target" || echo "WARNING: Could not remove temporary export $temp_target." >&2
+        fi
+    }
+    handle_export_signal() {
+        export_signal_status="$1"
+        cleanup_export
+        exit "$export_signal_status"
+    }
     target="${1:-}"
     [ -n "$target" ] || fail "usage: sub-storectl export-data /absolute/path/sub-store-data.tar.gz"
     case "$target" in /*) ;; *) fail "export destination must be an absolute path" ;; esac
@@ -832,23 +900,61 @@ export_data() {
     target_dir="${target%/*}"
     [ -n "$target_dir" ] || target_dir=/
     [ -d "$target_dir" ] || fail "export destination directory does not exist: $target_dir"
-    case "$target" in "$VOLUME_PATH"|"$VOLUME_PATH"/*) fail "export destination cannot be inside the data volume" ;; esac
-    paused=0
+    [ ! -d "$target" ] || fail "export destination must be a file: $target"
+    volume_real_path="$(cd -P "$VOLUME_PATH" 2>/dev/null && pwd -P)" ||
+        fail "could not resolve the Docker data volume path"
+    target_dir_real_path="$(cd -P "$target_dir" 2>/dev/null && pwd -P)" ||
+        fail "could not resolve the export destination directory"
+    case "$target_dir_real_path/" in
+        "$volume_real_path/"*) fail "export destination cannot be inside the data volume" ;;
+    esac
+    previous_umask="$(umask)"
+    umask 077
+    temp_target="$(mktemp "$target_dir/.sub-store-export.XXXXXX")" || {
+        umask "$previous_umask"
+        fail "could not create a private temporary export in $target_dir"
+    }
+    umask "$previous_umask"
+    trap 'handle_export_signal 129' HUP
+    trap 'handle_export_signal 130' INT
+    trap 'handle_export_signal 143' TERM
     if docker inspect -f '{{.State.Running}}' sub-store 2>/dev/null | grep -qx true; then
-        docker pause sub-store >/dev/null || fail "could not pause sub-store for a consistent export"
         paused=1
-    fi
-    result=0
-    tar -czf "$target" -C "$VOLUME_PATH" . || result=$?
-    if [ "$paused" = "1" ]; then
-        docker unpause sub-store >/dev/null || {
-            echo "WARNING: Export finished, but sub-store could not be unpaused. Start it manually." >&2
-            [ "$result" -ne 0 ] || result=1
+        docker pause sub-store >/dev/null || {
+            cleanup_export
+            fail "could not pause sub-store for a consistent export"
         }
     fi
-    [ "$result" -eq 0 ] || fail "could not export sub-store data"
-    chmod 600 "$target" 2>/dev/null || true
+    result=0
+    resume_result=0
+    tar -czf "$temp_target" -C "$VOLUME_PATH" . || result=$?
+    if [ "$paused" = "1" ]; then
+        if docker unpause sub-store >/dev/null; then
+            paused=0
+        else
+            echo "WARNING: Export finished, but sub-store could not be unpaused. Start it manually." >&2
+            resume_result=1
+        fi
+    fi
+    if [ "$result" -ne 0 ]; then
+        rm -f "$temp_target"
+        fail "could not export sub-store data"
+    fi
+    chmod 600 "$temp_target" 2>/dev/null || {
+        rm -f "$temp_target"
+        fail "could not secure the exported data"
+    }
+    mv -f "$temp_target" "$target" || {
+        rm -f "$temp_target"
+        fail "could not save the exported data to $target"
+    }
     echo "Exported sub-store data to $target"
+    if [ "$resume_result" -ne 0 ]; then
+        cleanup_export
+        trap - HUP INT TERM
+        fail "export was saved, but sub-store could not be unpaused"
+    fi
+    trap - HUP INT TERM
     command -v sha256sum >/dev/null 2>&1 && sha256sum "$target" || true
 }
 

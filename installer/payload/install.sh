@@ -2,7 +2,42 @@
 set -eu
 
 PACKAGE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-LOG=/tmp/sub-store-run-install.log
+if [ "$(id -u)" != "0" ]; then
+    printf '%s\n' "Run the .run installer as root." >&2
+    exit 1
+fi
+
+prepare_install_log() {
+    log_dir="$1"
+    current_uid="$(id -u)" || return 1
+    [ ! -L "$log_dir" ] || return 1
+    if [ ! -e "$log_dir" ]; then
+        mkdir -m 700 "$log_dir" || return 1
+    fi
+    [ -d "$log_dir" ] && [ ! -L "$log_dir" ] || return 1
+    directory_uid="$(stat -c '%u' "$log_dir" 2>/dev/null)" || return 1
+    [ "$directory_uid" = "$current_uid" ] || return 1
+    chmod 700 "$log_dir" || return 1
+    rm -f "$log_dir"/install.log.* || return 1
+
+    log_path="$log_dir/install.log"
+    [ ! -L "$log_path" ] || return 1
+    if [ -e "$log_path" ]; then
+        [ -f "$log_path" ] || return 1
+        file_metadata="$(stat -c '%u:%h' "$log_path" 2>/dev/null)" || return 1
+        file_uid="${file_metadata%%:*}"
+        link_count="${file_metadata#*:}"
+        [ "$file_uid" = "$current_uid" ] && [ "$link_count" = "1" ] || return 1
+    fi
+    : > "$log_path" || return 1
+    chmod 600 "$log_path" || return 1
+    printf '%s\n' "$log_path"
+}
+
+if ! LOG="$(prepare_install_log /tmp/sub-store-run-install)"; then
+    printf '%s\n' "Cannot safely prepare the installer log at /tmp/sub-store-run-install/install.log." >&2
+    exit 1
+fi
 LOG_MAX_BYTES=1048576
 INSTALL_STEP="准备安装"
 INSTALL_OK=0
@@ -11,8 +46,6 @@ PLUGIN_UPDATE_ACTIVE=0
 PLUGIN_TARGET_PREFIX=""
 FULL_INSTALL_ACTIVE=0
 SERVICE_WAS_ENABLED=0
-: > "$LOG"
-chmod 600 "$LOG"
 PACKAGE_VERSION=dev
 if [ -r "$PACKAGE_DIR/build-version" ]; then
     PACKAGE_VERSION="$(cat "$PACKAGE_DIR/build-version")"
@@ -22,7 +55,7 @@ say() {
     printf '%s\n' "$*" | tee -a "$LOG"
     log_size="$(wc -c < "$LOG" | tr -d '[:space:]')"
     if [ -n "$log_size" ] && [ "$log_size" -gt "$LOG_MAX_BYTES" ]; then
-        trimmed_log="$(umask 077; mktemp /tmp/sub-store-run-install.XXXXXX)"
+        trimmed_log="$(umask 077; mktemp "$LOG.XXXXXX")"
         tail -c "$LOG_MAX_BYTES" "$LOG" > "$trimmed_log"
         mv "$trimmed_log" "$LOG"
     fi
@@ -31,6 +64,55 @@ say() {
 fail() {
     say "ERROR: $*"
     exit 1
+}
+
+is_supported_release() {
+    case "$1" in
+        24.10*|25.12*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+detect_package_manager() {
+    if command -v opkg >/dev/null 2>&1; then
+        PACKAGE_MANAGER=opkg
+    elif command -v apk >/dev/null 2>&1; then
+        PACKAGE_MANAGER=apk
+    else
+        fail "This installer requires iStoreOS/OpenWrt with opkg or apk."
+    fi
+}
+
+package_manager_update() {
+    case "$PACKAGE_MANAGER" in
+        opkg) opkg update ;;
+        apk) apk update ;;
+        *) fail "No supported package manager has been selected." ;;
+    esac
+}
+
+package_manager_install() {
+    case "$PACKAGE_MANAGER" in
+        opkg) opkg install "$@" ;;
+        apk) apk add "$@" ;;
+        *) fail "No supported package manager has been selected." ;;
+    esac
+}
+
+package_is_installed() {
+    case "$PACKAGE_MANAGER" in
+        opkg) opkg status "$1" 2>/dev/null | grep -q 'Status:.*installed' ;;
+        apk) apk info 2>/dev/null | grep -Fxq -- "$1" ;;
+        *) fail "No supported package manager has been selected." ;;
+    esac
+}
+
+ensure_jsonfilter() {
+    command -v jsonfilter >/dev/null 2>&1 && return 0
+    say "Installing required jsonfilter package..."
+    package_manager_update || fail "Could not refresh package feeds to install jsonfilter."
+    package_manager_install jsonfilter || fail "Could not install jsonfilter from the configured package feeds."
+    command -v jsonfilter >/dev/null 2>&1 || fail "jsonfilter is still unavailable after package installation."
 }
 
 step() {
@@ -43,9 +125,11 @@ plugin_target_path() {
 }
 
 refresh_luci_cache() {
-    rm -f /tmp/luci-indexcache*
-    rm -rf /tmp/luci-modulecache
-    [ ! -x /etc/init.d/rpcd ] || /etc/init.d/rpcd reload >/dev/null 2>&1 || true
+    rm -f /tmp/luci-indexcache* || { say "WARNING: Could not clear the LuCI index cache." || true; }
+    rm -rf /tmp/luci-modulecache || { say "WARNING: Could not clear the LuCI module cache." || true; }
+    if [ -x /etc/init.d/rpcd ] && ! /etc/init.d/rpcd reload >/dev/null 2>&1; then
+        say "WARNING: Could not reload rpcd; reload the LuCI page manually." || true
+    fi
 }
 
 rollback_plugin_update() {
@@ -124,17 +208,15 @@ finish() {
 }
 trap finish EXIT
 step 1 "检查系统与安装依赖"
-[ "$(id -u)" = "0" ] || fail "Run the .run installer as root."
-command -v opkg >/dev/null 2>&1 || fail "This build requires an opkg-based iStoreOS/OpenWrt 24.10.x system."
+detect_package_manager
+ensure_jsonfilter
 [ -d /etc ] || fail "Cannot find the system configuration directory."
 PLUGIN_ONLY="${SUB_STORE_PLUGIN_ONLY:-0}"
 
 if [ -r /etc/openwrt_release ]; then
     . /etc/openwrt_release
-    case "${DISTRIB_RELEASE:-}" in
-        24.10*) ;;
-        *) say "WARNING: built for 24.10.x; detected ${DISTRIB_RELEASE:-unknown}. Continuing with best-effort compatibility." ;;
-    esac
+    is_supported_release "${DISTRIB_RELEASE:-}" ||
+        say "WARNING: tested on iStoreOS 24.10.x and 25.12.x; detected ${DISTRIB_RELEASE:-unknown}. Continuing with best-effort compatibility."
 fi
 
 if [ "$PLUGIN_ONLY" = "1" ]; then
@@ -144,9 +226,9 @@ if [ "$PLUGIN_ONLY" = "1" ]; then
         fail "LuCI status dependencies are unavailable; reinstall the full package."
 else
     if ! command -v docker >/dev/null 2>&1; then
-        say "Installing Docker from the configured opkg feeds..."
-        opkg update
-        opkg install dockerd docker
+        say "Installing Docker from the configured package feeds..."
+        package_manager_update || fail "Could not refresh package feeds to install Docker."
+        package_manager_install dockerd docker || fail "Could not install Docker from the configured package feeds."
     fi
 
     command -v docker >/dev/null 2>&1 || fail "Docker CLI is still unavailable after package installation."
@@ -155,10 +237,11 @@ else
     if [ ! -f /www/luci-static/resources/form.js ] || ! command -v lua >/dev/null 2>&1 ||
         ! lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 ||
         ! command -v curl >/dev/null 2>&1 ||
-        ! opkg status rpcd-mod-file 2>/dev/null | grep -q 'Status:.*installed'; then
+        ! package_is_installed rpcd-mod-file; then
         say "Installing native LuCI and RPC dependencies..."
-        opkg update
-        opkg install luci-base lua luci-lib-base luci-lib-jsonc rpcd-mod-file curl
+        package_manager_update || fail "Could not refresh package feeds to install LuCI dependencies."
+        package_manager_install luci-base lua luci-lib-base luci-lib-jsonc rpcd-mod-file curl ||
+            fail "Could not install LuCI dependencies from the configured package feeds."
     fi
     [ -f /www/luci-static/resources/form.js ] || fail "LuCI JavaScript form support is unavailable."
     lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 || fail "LuCI status dependencies are unavailable."
@@ -407,11 +490,8 @@ chmod 644 /etc/sub-store/version
 # retired by sub-storectl.
 commit_plugin_update
 FULL_INSTALL_ACTIVE=0
-
-rm -f /tmp/luci-indexcache
-rm -f /tmp/luci-indexcache.*
-rm -rf /tmp/luci-modulecache
-[ ! -x /etc/init.d/rpcd ] || /etc/init.d/rpcd reload
+INSTALL_OK=1
+refresh_luci_cache || true
 say "LuCI 页面已更新；如入口未刷新，请重新登录路由器管理页面。"
 
 say "sub-store package installed."
@@ -420,5 +500,3 @@ say "Management URL: $(/usr/bin/sub-storectl url)"
 say "Docker storage: $(/usr/bin/sub-storectl storage 2>/dev/null || echo unavailable)"
 say "Package version: $PACKAGE_VERSION"
 say "The first install and image pull require Internet access. No WAN firewall rule or port forward was added."
-
-INSTALL_OK=1

@@ -11,7 +11,7 @@ awk '
     /^commit_plugin_update\(\) \{/ { copy=1 }
     copy { print }
     copy && /^\}$/ { copy=0 }
-' "$ROOT/run/payload/install.sh" > "$TEST_DIR/functions.sh"
+' "$ROOT/installer/payload/install.sh" > "$TEST_DIR/functions.sh"
 . "$TEST_DIR/functions.sh"
 say() { :; }
 refresh_luci_cache() { :; }

@@ -2,7 +2,7 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-. "$ROOT/run/payload/root/usr/lib/sub-store/cron.sh"
+. "$ROOT/installer/payload/root/usr/lib/sub-store/cron.sh"
 
 for expression in \
     '55 23 * * *' \

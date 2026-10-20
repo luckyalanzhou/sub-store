@@ -6,11 +6,16 @@ RELEASE_API="https://api.github.com/repos/$REPOSITORY/releases/latest"
 STATE_DIR=/tmp/sub-store-plugin-update
 CURRENT_VERSION_FILE=/etc/sub-store/version
 MODE="${1:-}"
+REQUIRED_UID=0
+LATEST_TEMP=""
+AVAILABLE_TEMP=""
 
 fail() {
     echo "plugin-update: $*" >&2
     exit 1
 }
+
+[ "$(id -u)" = "$REQUIRED_UID" ] || fail "This command must be run as root."
 
 valid_version() {
     printf '%s\n' "$1" | awk '
@@ -65,15 +70,40 @@ fetch_latest() {
     printf '%s\n' "$latest_version"
 }
 
+prepare_state_dir() {
+    current_uid="$(id -u)" || return 1
+    [ ! -L "$STATE_DIR" ] || return 1
+    if [ ! -e "$STATE_DIR" ]; then
+        mkdir -m 700 "$STATE_DIR" || return 1
+    fi
+    [ -d "$STATE_DIR" ] && [ ! -L "$STATE_DIR" ] || return 1
+    state_uid="$(stat -c '%u' "$STATE_DIR" 2>/dev/null)" || return 1
+    [ "$state_uid" = "$current_uid" ] || return 1
+    chmod 700 "$STATE_DIR" || return 1
+}
+
 write_state() {
     latest_version="$1"
     available="$2"
-    mkdir -p "$STATE_DIR"
-    umask 077
-    printf '%s\n' "$latest_version" > "$STATE_DIR/latest-version.tmp"
-    printf '%s\n' "$available" > "$STATE_DIR/update-available.tmp"
-    mv "$STATE_DIR/latest-version.tmp" "$STATE_DIR/latest-version"
-    mv "$STATE_DIR/update-available.tmp" "$STATE_DIR/update-available"
+    prepare_state_dir || return 1
+
+    for state_name in latest-version update-available; do
+        state_path="$STATE_DIR/$state_name"
+        if [ -L "$state_path" ]; then
+            rm -f "$state_path" || return 1
+        elif [ -e "$state_path" ] && [ ! -f "$state_path" ]; then
+            return 1
+        fi
+    done
+
+    LATEST_TEMP="$(umask 077; mktemp "$STATE_DIR/latest-version.XXXXXX")" || return 1
+    AVAILABLE_TEMP="$(umask 077; mktemp "$STATE_DIR/update-available.XXXXXX")" || return 1
+    printf '%s\n' "$latest_version" > "$LATEST_TEMP" || return 1
+    printf '%s\n' "$available" > "$AVAILABLE_TEMP" || return 1
+    mv -f "$LATEST_TEMP" "$STATE_DIR/latest-version" || return 1
+    LATEST_TEMP=""
+    mv -f "$AVAILABLE_TEMP" "$STATE_DIR/update-available" || return 1
+    AVAILABLE_TEMP=""
 }
 
 current_version="$(cat "$CURRENT_VERSION_FILE" 2>/dev/null || true)"
@@ -87,12 +117,17 @@ command -v jsonfilter >/dev/null 2>&1 || fail "jsonfilter is unavailable."
 command -v awk >/dev/null 2>&1 || fail "awk is unavailable."
 
 TEMP_DIR="$(mktemp -d /tmp/sub-store-plugin-update.XXXXXX)" || fail "Could not create a temporary directory."
-cleanup() { rm -rf "$TEMP_DIR"; }
+cleanup() {
+    [ -z "$LATEST_TEMP" ] || rm -f "$LATEST_TEMP"
+    [ -z "$AVAILABLE_TEMP" ] || rm -f "$AVAILABLE_TEMP"
+    rm -rf "$TEMP_DIR"
+}
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+prepare_state_dir || fail "The plugin update state directory is not safe to use."
 latest_version="$(fetch_latest "$TEMP_DIR")"
 if valid_version "$current_version"; then
     comparison="$(compare_versions "$latest_version" "$current_version")"
@@ -100,7 +135,7 @@ if valid_version "$current_version"; then
 else
     update_available=1
 fi
-write_state "$latest_version" "$update_available"
+write_state "$latest_version" "$update_available" || fail "Could not safely save the plugin update state."
 
 if [ "$MODE" = "check" ]; then
     printf '当前插件版本：%s\n最新插件版本：%s\n' "${current_version:-未知}" "$latest_version"
@@ -149,5 +184,5 @@ SUB_STORE_PLUGIN_ONLY=1 "$package"
 
 installed_version="$(cat "$CURRENT_VERSION_FILE" 2>/dev/null || true)"
 [ "$installed_version" = "$latest_version" ] || fail "The installer returned without installing the requested plugin version."
-write_state "$latest_version" 0
+write_state "$latest_version" 0 || fail "The plugin was installed, but its update state could not be saved."
 echo "LuCI plugin updated to $installed_version. The Docker image and container were not changed."

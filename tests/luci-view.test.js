@@ -1,21 +1,52 @@
 const fs = require('node:fs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync('run/payload/root/www/luci-static/resources/view/sub-store/manage.js', 'utf8');
+const source = fs.readFileSync('installer/payload/root/www/luci-static/resources/view/sub-store/manage.js', 'utf8');
 function setup() {
     const options = {}, calls = [], polls = [];
     const rootLogTab = { textContent: '日志', clicks: 0, click() { this.clicks += 1; } };
     const state = { container: 'running', health: 'healthy', url: 'http://router.test:3001/?api=x', busy: false, version: 'test',
-        app_version: '2.42.3', created: '2026-10-13T00:00:00Z', output: 'maintenance log', container_log: 'runtime log',
+        app_version: '2.42.3', created: '2026-10-13T00:00:00Z', operation_id: 'old-operation',
+        output: 'maintenance log', container_log: 'runtime log',
         storage: '/mnt/docker/volumes/sub-store-data/_data', plugin_latest_version: '', plugin_update_available: false };
-    const E = (tag, attrs = {}, children = []) => ({ tag, ...attrs, children, textContent: '', value: '', focus() {}, select() {},
-        setAttribute(name, value) { this[name] = value; } });
+    const E = (tag, attrs = {}, children = []) => {
+        const node = { tag, ...attrs, children, textContent: '', value: '', focus() {}, select() {},
+            setAttribute(name, value) { this[name] = String(value); },
+            getAttribute(name) { return this[name] == null ? null : String(this[name]); } };
+        children.forEach(child => { if (child && typeof child === 'object') child.parentNode = node; });
+        return node;
+    };
     const ui = { createHandlerFn: (ctx, fn) => function(...args) {
         if (global.window && global.window.requireCurrentTarget && !args.some(arg => arg && arg.currentTarget))
             throw new TypeError('event.currentTarget is required');
         return fn.apply(ctx, args);
     }, changes: { init: async () => {}, apply: async () => { calls.push(['apply']); } },
-        tabs: { initTabGroup: panes => calls.push(['tabs', panes]) },
+        tabs: { initTabGroup: panes => {
+            calls.push(['tabs', panes]);
+            const items = [];
+            panes.forEach(pane => {
+                const item = E('li', { className: pane.getAttribute('data-tab-active') === 'true' ? 'cbi-tab' : 'cbi-tab-disabled',
+                    'data-tab': pane.getAttribute('data-tab') });
+                const handler = () => {
+                    panes.forEach((candidate, index) => {
+                        candidate.setAttribute('data-tab-active', candidate === pane ? 'true' : 'false');
+                        items[index].className = candidate === pane ? 'cbi-tab' : 'cbi-tab-disabled';
+                    });
+                };
+                const link = E('a', { click: () => handler() }, [pane.getAttribute('data-tab-title')]);
+                link.click = handler;
+                item.children.push(link);
+                link.parentNode = item;
+                items.push(item);
+            });
+            const menu = E('ul', { className: 'cbi-tabmenu' }, items);
+            menu.querySelector = selector => {
+                const id = selector.match(/data-tab="([^"]+)"/)[1];
+                const item = items.find(candidate => candidate.getAttribute('data-tab') === id);
+                return item && item.children[0];
+            };
+            panes[0].parentNode.previousElementSibling = menu;
+        } },
         addNotification: (...args) => calls.push(['notice', ...args]), showModal: (...args) => calls.push(['modal', ...args]), hideModal() {} };
     const uci = { load: async () => {}, unload() {} };
     const backend = { exec: async (path, args) => {
@@ -122,26 +153,25 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.logBoxes.operation.value, 'maintenance log');
     assert.equal(t.view.logBoxes.container.cols, 120);
     assert.equal(t.options._logs.tab, 'logs');
-    assert.equal(t.options._logs.label, '');
+    assert.equal(t.options._logs.label, null);
     assert.equal(t.options._logs.description, undefined);
     assert.equal(t.options._rotate.description, undefined);
     assert.ok(Object.values(t.options).every(option => option.description === undefined));
     assert.equal(t.view.clearLogButtons.container.children[0], '清空日志');
     assert.equal(t.view.clearLogButtons.operation.children[0], '清空日志');
-    assert.deepEqual(t.view.logTabMenu.children.map(item => item.children[0].children[0]), ['运行日志', '维护日志']);
-    assert.equal(t.view.logTabMenu.style, 'display:flex;flex-wrap:wrap;width:100%;margin:0;padding:0');
-    assert.ok(t.view.logTabMenu.children.every(item => item.style === 'display:inline-flex;flex:0 0 auto;width:auto'));
-    assert.ok(t.view.logTabMenu.children.every(item => item.children[0].style === 'display:inline-flex;width:auto;white-space:nowrap'));
+    assert.deepEqual(t.view.logPanes.map(pane => pane.getAttribute('data-tab-title')), ['运行日志', '维护日志']);
+    assert.deepEqual(t.calls.find(call => call[0] === 'tabs')[1], t.view.logPanes);
+    assert.equal(t.view.logPanes[0].parentNode.previousElementSibling.className, 'cbi-tabmenu');
     assert.equal(t.options._logs.renderWidget().children[0], t.view.logPanes[0]);
-    assert.equal(t.view.logPanes[0].children[0], t.view.clearLogButtons.container);
-    assert.equal(t.view.logPanes[1].children[0], t.view.clearLogButtons.operation);
-    assert.equal(t.view.logPanes[0].hidden, undefined);
-    assert.equal(t.view.logPanes[1].hidden, true);
-    t.view.logTabItems[1].children[0].click({ preventDefault() {} });
-    assert.equal(t.view.logPanes[0].hidden, true);
-    assert.equal(t.view.logPanes[1].hidden, false);
-    assert.equal(t.view.logTabItems[1].className, 'cbi-tab');
-    assert.equal(t.view.logTabItems[1].children[0]['aria-selected'], 'true');
+    assert.equal(t.view.logPanes[0].children[0].children[0], t.view.clearLogButtons.container);
+    assert.equal(t.view.logPanes[1].children[0].children[0], t.view.clearLogButtons.operation);
+    assert.equal(t.view.logPanes[0].getAttribute('data-tab-active'), 'true');
+    assert.equal(t.view.logPanes[1].getAttribute('data-tab-active'), null);
+    t.view.selectLogTab(1);
+    assert.equal(t.view.logPanes[0].getAttribute('data-tab-active'), 'false');
+    assert.equal(t.view.logPanes[1].getAttribute('data-tab-active'), 'true');
+    assert.equal(t.view.logPanes[0].parentNode.previousElementSibling.children[1].className, 'cbi-tab');
+    assert.doesNotMatch(source, /logTabMenu|logTabItems|role: 'tablist'|style: 'display:flex/);
     assert.doesNotMatch(source, /刷新日志/);
     t.state.container_log = 'refreshed runtime log';
     t.state.output = 'refreshed maintenance log';
@@ -158,6 +188,12 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.notEqual(t.options.public_url.validate('main', 'https://bad..example.test'), true);
     assert.match(source, /document\.hidden/);
     assert.match(source, /runtime-log.*maintenance-log/s);
+});
+test('log tabs omit the duplicate field label and use LuCI tab styling', async () => {
+    const t = setup();
+    await t.view.render(await t.view.load());
+    assert.equal(t.options._logs.label, null);
+    assert.match(source, /ui\.tabs\.initTabGroup\(this\.logPanes\)/);
 });
 test('service actions follow the current container state', async () => {
     const t = setup(); await t.view.render(await t.view.load());
@@ -310,9 +346,8 @@ test('checking updates opens the maintenance log tab automatically', async () =>
     const t = setup(); await t.view.render(await t.view.load());
     await t.view.run('update-all');
     assert.equal(t.rootLogTab.clicks, 1);
-    assert.equal(t.view.logPanes[0].hidden, true);
-    assert.equal(t.view.logPanes[1].hidden, false);
-    assert.equal(t.view.logTabItems[1].children[0]['aria-selected'], 'true');
+    assert.equal(t.view.logPanes[0].getAttribute('data-tab-active'), 'false');
+    assert.equal(t.view.logPanes[1].getAttribute('data-tab-active'), 'true');
     await t.view.enqueueTask;
 });
 test('XHR timeout is quiet when polling confirms the queued task', async () => {
@@ -331,6 +366,23 @@ test('XHR timeout is quiet when polling confirms the queued task', async () => {
     assert.equal(t.view.status.textContent, 'sub-store 服务状态：正在维护');
     assert.equal(t.calls.some(call => call[0] === 'notice'), false);
     assert.equal(t.view.localBusy, false);
+});
+test('operation ID confirms a task that finishes before the first status poll', async () => {
+    const t = setup(); await t.view.render(await t.view.load());
+    t.state.operation = '操作成功：start；完成时间：2026-10-14 12:00:00';
+    t.backend.exec = async (path, args) => {
+        t.calls.push([path, args]);
+        if (path.endsWith('job.sh')) {
+            Object.assign(t.state, { busy: false, action: 'start', phase: 'success', operation_id: 'new-operation' });
+            throw new Error('XHR request timed out');
+        }
+        return { code: 0, stdout: JSON.stringify(t.state) };
+    };
+    await t.view.run('start');
+    await t.view.enqueueTask;
+    assert.equal(t.view.localBusy, false);
+    assert.equal(t.view.enqueuePendingAction, null);
+    assert.equal(t.calls.some(call => call[0] === 'notice'), false);
 });
 test('XHR timeout keeps controls locked until polling confirms no task started', async () => {
     const t = setup(); await t.view.render(await t.view.load());
@@ -357,10 +409,10 @@ test('logs are displayed as text and stopped container hides open link', async (
 });
 test('service diagnostics stay automatic without a manual log action', async () => {
     const t = setup(); await t.view.render(await t.view.load());
-    assert.deepEqual(t.view.logTabMenu.children.map(item => item.children[0].children[0]), ['运行日志', '维护日志']);
+    assert.deepEqual(t.view.logPanes.map(pane => pane.getAttribute('data-tab-title')), ['运行日志', '维护日志']);
     assert.equal(t.options._logs.renderWidget().children[0], t.view.logPanes[0]);
     assert.doesNotMatch(source, /检查服务|action === 'check'/);
-    const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');
+    const controller = fs.readFileSync('installer/payload/root/usr/bin/sub-storectl', 'utf8');
     assert.doesNotMatch(controller, /^\s*check\)/m);
     assert.match(controller, /docker exec -i sub-store node --input-type=commonjs - < "\$HEALTHCHECK"/);
 });
@@ -382,7 +434,7 @@ test('each separate log has its own clear action and preserves distinct behavior
     }
 });
 test('menu and ACL expose only this configuration and fixed helper paths', () => {
-    const root = 'run/payload/root/usr/share/';
+    const root = 'installer/payload/root/usr/share/';
     const menu = JSON.parse(fs.readFileSync(root + 'luci/menu.d/luci-app-sub-store.json'));
     assert.equal(menu['admin/services/sub-store'].action.path, 'sub-store/manage');
     const acl = JSON.parse(fs.readFileSync(root + 'rpcd/acl.d/luci-app-sub-store.json'))['luci-app-sub-store'];
@@ -403,19 +455,22 @@ test('one update button checks the plugin and Docker image, then updates newer v
     assert.deepEqual(queued, ['update-all']);
     assert.doesNotMatch(source, /检查插件更新|下载并安装|更新 Sub-Store 镜像/);
     assert.match(source, /重新生成 API 访问密钥/);
-    const controller = fs.readFileSync('run/payload/root/usr/bin/sub-storectl', 'utf8');
+    const controller = fs.readFileSync('installer/payload/root/usr/bin/sub-storectl', 'utf8');
     const combinedAction = controller.slice(controller.indexOf('    update-all)'), controller.indexOf('    check-plugin-update)'));
     assert.match(combinedAction, /\$0" update/);
     assert.match(combinedAction, /plugin-update install-if-newer/);
     assert.match(combinedAction, /image_result.*plugin_result/s);
     assert.match(combinedAction, /plugin_result.*fail/s);
-    const installer = fs.readFileSync('run/payload/install.sh', 'utf8');
+    const installer = fs.readFileSync('installer/payload/install.sh', 'utf8');
     assert.match(installer, /PLUGIN_ONLY="\$\{SUB_STORE_PLUGIN_ONLY:-0\}"/);
     assert.match(installer, /The Docker image, container, and data were not changed/);
     assert.match(installer, /SUB_STORE_PLUGIN_ONLY/);
 });
 test('installer clears LuCI caches when replacing the page', () => {
-    const installer = fs.readFileSync('run/payload/install.sh', 'utf8');
+    const installer = fs.readFileSync('installer/payload/install.sh', 'utf8');
     assert.match(installer, /rm -f \/tmp\/luci-indexcache\*/);
     assert.match(installer, /rm -rf \/tmp\/luci-modulecache/);
+    assert.match(installer, /rm -f \/tmp\/luci-indexcache\* \|\| \{ say "WARNING:/);
+    assert.match(installer, /rm -rf \/tmp\/luci-modulecache \|\| \{ say "WARNING:/);
+    assert.match(installer, /commit_plugin_update\s+FULL_INSTALL_ACTIVE=0\s+INSTALL_OK=1\s+refresh_luci_cache/);
 });

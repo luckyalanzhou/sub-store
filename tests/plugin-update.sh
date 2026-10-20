@@ -6,8 +6,9 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin"
 
-SOURCE="$ROOT/run/payload/root/usr/lib/sub-store/plugin-update"
+SOURCE="$ROOT/installer/payload/root/usr/lib/sub-store/plugin-update"
 sed -e "s|STATE_DIR=/tmp/sub-store-plugin-update|STATE_DIR=$TMP/state|" \
+    -e "s|REQUIRED_UID=0|REQUIRED_UID=$(id -u)|" \
     -e "s|CURRENT_VERSION_FILE=/etc/sub-store/version|CURRENT_VERSION_FILE=$TMP/current-version|" \
     "$SOURCE" > "$TMP/plugin-update"
 chmod 755 "$TMP/plugin-update"
@@ -78,10 +79,31 @@ export TEST_CURL_LOG="$TMP/curl.log"
 : > "$TEST_CURL_LOG"
 export PATH="$TMP/bin:$PATH"
 
+mkdir "$TMP/state-target"
+printf '%s\n' protected > "$TMP/state-target/latest-version"
+ln -s "$TMP/state-target" "$TMP/state"
+if "$TMP/plugin-update" check > "$TMP/untrusted-state.log" 2>&1; then
+    echo 'A symlinked plugin update state directory was accepted.' >&2
+    exit 1
+fi
+[ "$(cat "$TMP/state-target/latest-version")" = protected ]
+[ ! -s "$TEST_CURL_LOG" ]
+rm "$TMP/state"
+
 "$TMP/plugin-update" check > "$TMP/check.log"
 [ "$(cat "$TMP/state/latest-version")" = 1.3.0 ]
 [ "$(cat "$TMP/state/update-available")" = 1 ]
+[ "$(stat -c '%a' "$TMP/state")" = 700 ]
+[ "$(stat -c '%a' "$TMP/state/latest-version")" = 600 ]
 grep -q '发现新版本' "$TMP/check.log"
+
+printf '%s\n' protected > "$TMP/state-target-file"
+rm "$TMP/state/latest-version"
+ln -s "$TMP/state-target-file" "$TMP/state/latest-version"
+"$TMP/plugin-update" check > "$TMP/symlink-state-file.log"
+[ "$(cat "$TMP/state-target-file")" = protected ]
+[ ! -L "$TMP/state/latest-version" ]
+[ "$(cat "$TMP/state/latest-version")" = 1.3.0 ]
 
 TEST_BAD_CHECKSUM=1
 export TEST_BAD_CHECKSUM
