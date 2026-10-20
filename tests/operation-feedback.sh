@@ -5,6 +5,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 cat > "$TMP/ctl" <<'EOF'
 #!/bin/sh
+[ "$1" != "restart" ] || : > "$RESTART_STARTED"
 echo "operation output: $1"
 if [ "$1" = "update" ] && [ -f "$INTERRUPT_UPDATE" ]; then
     printf '%s\n' "$$" > "$COMMAND_PID_FILE"
@@ -13,7 +14,6 @@ if [ "$1" = "update" ] && [ -f "$INTERRUPT_UPDATE" ]; then
     echo 'operation output: interrupt-controlled update complete'
     exit 0
 fi
-[ "$1" != "restart" ] || : > "$RESTART_STARTED"
 [ "$1" != "update" ] || {
     if [ -f "$SLOW_UPDATE" ]; then
         dd if=/dev/zero bs=1024 count=1200 2>/dev/null | tr '\000' x
@@ -82,7 +82,15 @@ report_worker_timeout() {
     worker_pid="$(cat "$state_dir/lock/pid" 2>/dev/null || true)"
     case "$worker_pid" in
         ''|*[!0-9]*) ;;
-        *) ps | awk -v pid="$worker_pid" 'NR == 1 || $1 == pid' >&2 || true ;;
+        *)
+            ps >&2 || true
+            if [ -r "/proc/$worker_pid/wchan" ]; then
+                printf 'worker wait channel: ' >&2
+                cat "/proc/$worker_pid/wchan" >&2
+                printf 'worker file descriptors:\n' >&2
+                ls -l "/proc/$worker_pid/fd" >&2 || true
+            fi
+            ;;
     esac
 }
 export SLOW_UPDATE="$TMP/slow-update"
