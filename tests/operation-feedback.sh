@@ -80,10 +80,12 @@ sed -e "s|STATE=/tmp/sub-store-operation|STATE=$TMP/foreign-state|" \
     -e "s|/usr/bin/sub-storectl|$TMP/ctl|" \
     "$ROOT/installer/payload/root/usr/lib/sub-store/job.sh" > "$TMP/foreign-job"
 export STATE_TO_CHECK="$TMP/foreign-state"
-if FAKE_STATE_OWNER=99999 run_sh "$TMP/foreign-job" start > "$TMP/foreign-output" 2>&1; then
+export FAKE_STATE_OWNER=99999
+if run_sh "$TMP/foreign-job" start > "$TMP/foreign-output" 2>&1; then
     echo 'A foreign-owned operation state directory was accepted.' >&2
     exit 1
 fi
+unset FAKE_STATE_OWNER
 grep -Fq 'Operation state directory is not trusted' "$TMP/foreign-output" || {
     cat "$TMP/foreign-output" >&2
     echo 'The foreign-owned operation state directory failed for an unexpected reason.' >&2
