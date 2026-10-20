@@ -110,22 +110,24 @@ run_job() {
     COMMAND=/usr/bin/sub-storectl
     set -- "$ACTION"
     trim_operation_log() {
-        log_size="$(wc -c < "$STATE/output.log" | tr -d '[:space:]')"
-        if [ -n "$log_size" ] && [ "$log_size" -gt 1048576 ]; then
+        if [ "$log_size" -gt 1048576 ]; then
             trimmed_log="$(mktemp "$STATE/output.log.XXXXXX")"
             tail -c 1048576 "$STATE/output.log" > "$trimmed_log"
             mv "$trimmed_log" "$STATE/output.log"
+            log_size=1048576
         fi
     }
 
     consume_operation_output() {
         chunk="$STATE/output.chunk.$$"
+        log_size=0
         exec 3< "$STATE/output.pipe"
         while :; do
             dd of="$chunk" bs=16384 count=1 iflag=fullblock <&3 2>/dev/null || break
-            chunk_size="$(wc -c < "$chunk" | tr -d '[:space:]')"
+            chunk_size="$(stat -c '%s' "$chunk" 2>/dev/null)" || break
             [ -n "$chunk_size" ] && [ "$chunk_size" -gt 0 ] || break
             cat "$chunk" >> "$STATE/output.log" || break
+            log_size=$((log_size + chunk_size))
             trim_operation_log || true
         done
         exec 3<&-
@@ -146,7 +148,6 @@ run_job() {
     fi
     wait "$log_pid" || true
     rm -f "$STATE/output.pipe"
-    trim_operation_log || true
     if [ "$result" -eq 0 ]; then
         write_operation_state success "操作成功：$ACTION；完成时间：$(date '+%Y-%m-%d %H:%M:%S')"
     else
