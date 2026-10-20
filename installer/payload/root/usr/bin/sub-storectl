@@ -50,6 +50,30 @@ assert_official_image_ref() {
     esac
 }
 
+valid_hostname_or_ipv4() {
+    host_value="$1"
+    case "$host_value" in
+        ''|*[!A-Za-z0-9.-]*|.*|*.|-*|*-|*..*|*-.*|*.-*) return 1 ;;
+    esac
+    [ "${#host_value}" -le 253 ] || return 1
+    printf '%s\n' "$host_value" | awk '
+        {
+            count = split($0, labels, /\./)
+            if ($0 ~ /^[0-9.]+$/) {
+                if (count != 4) exit 1
+                for (i = 1; i <= count; i++) {
+                    if (labels[i] !~ /^[0-9]+$/ || length(labels[i]) > 3 ||
+                        (length(labels[i]) > 1 && substr(labels[i], 1, 1) == "0") ||
+                        labels[i] + 0 > 255) exit 1
+                }
+            } else {
+                for (i = 1; i <= count; i++)
+                    if (length(labels[i]) > 63) exit 1
+            }
+        }
+    '
+}
+
 valid_config() {
     case "$FRONTEND_PORT" in
         ''|*[!0-9]*) fail "frontend port must be an integer" ;;
@@ -63,13 +87,8 @@ valid_config() {
     case "$BACKEND_LAN_ACCESS" in 0|1) ;; *) fail "backend LAN access must be 0 or 1" ;; esac
     assert_official_image_ref "$IMAGE_REF"
 
-    case "$ACCESS_HOST" in
-        '') ;;
-        *[!A-Za-z0-9.-]*|.*|*.|-*|*-|*..*|*-.*|*.-*)
-            fail "access host must be a hostname or IPv4 address without protocol or port"
-            ;;
-    esac
-    [ "${#ACCESS_HOST}" -le 253 ] || fail "access host must not exceed 253 characters"
+    [ -z "$ACCESS_HOST" ] || valid_hostname_or_ipv4 "$ACCESS_HOST" ||
+        fail "access host must be a valid hostname or IPv4 address without protocol or port"
 
     if [ -n "$PUBLIC_URL" ]; then
         printf '%s\n' "$PUBLIC_URL" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^?#[:space:]]*)?$' ||
@@ -77,11 +96,7 @@ valid_config() {
         public_authority="${PUBLIC_URL#*://}"
         public_authority="${public_authority%%/*}"
         public_host="${public_authority%%:*}"
-        case "$public_host" in
-            *[!A-Za-z0-9.-]*|.*|*.|-*|*-|*..*|*-.*|*.-*)
-                fail "public URL contains an invalid hostname"
-                ;;
-        esac
+        valid_hostname_or_ipv4 "$public_host" || fail "public URL contains an invalid hostname"
         public_port="${public_authority##*:}"
         if [ "$public_port" != "$public_authority" ]; then
             [ "$public_port" -ge 1 ] 2>/dev/null && [ "$public_port" -le 65535 ] 2>/dev/null ||

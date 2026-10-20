@@ -35,6 +35,14 @@ function compareVersions(left, right) {
     }
     return 0;
 }
+function validHostnameOrIPv4(host) {
+    if (!host || host.length > 253 || !/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) ||
+        /\.\.|-\.|\.-/.test(host)) return false;
+    const labels = host.split('.');
+    if (/^[0-9.]+$/.test(host))
+        return labels.length === 4 && labels.every(label => /^(0|[1-9][0-9]{0,2})$/.test(label) && +label <= 255);
+    return labels.every(label => label.length <= 63);
+}
 return view.extend({
     validCron: validCron,
     compareVersions: compareVersions,
@@ -387,8 +395,7 @@ return view.extend({
         const frontend = o;
         o = s.taboption('basic', form.Value, 'access_host', '访问主机名');
         o.validate = function(section, value) {
-            return !value || (value.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(value) &&
-                !/\.\.|-\.|\.-/.test(value)) || '请输入域名或 IPv4，不含协议和端口。';
+            return !value || validHostnameOrIPv4(value) || '请输入域名或 IPv4，不含协议和端口。';
         };
         o = s.taboption('basic', form.Value, 'public_url', '公开访问地址');
         o.validate = function(section, value) {
@@ -397,7 +404,7 @@ return view.extend({
                 return '请输入不含查询参数的 HTTP 或 HTTPS 地址。';
             const authority = value.replace(/^https?:\/\//, '').split('/')[0];
             const host = authority.split(':')[0];
-            if (!host || host.length > 253 || !/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) || /\.\.|-\.|\.-/.test(host))
+            if (!validHostnameOrIPv4(host))
                 return '公开访问地址中的主机名无效。';
             const port = authority.includes(':') ? +authority.split(':').pop() : 0;
             return !port || (port >= 1 && port <= 65535) || '端口必须在 1 到 65535 之间。';

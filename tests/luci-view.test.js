@@ -185,8 +185,17 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.notEqual(t.options.api_path.validate('main', 'z'.repeat(48)), true);
     assert.notEqual(t.options.access_host.validate('main', 'http://router:3001'), true);
     assert.notEqual(t.options.access_host.validate('main', 'a'.repeat(254)), true);
+    assert.equal(t.options.access_host.validate('main', 'router.example.test'), true);
+    assert.equal(t.options.access_host.validate('main', 'a'.repeat(63) + '.example'), true);
+    assert.equal(t.options.access_host.validate('main', '192.168.100.1'), true);
+    assert.equal(t.options.access_host.validate('main', '255.255.255.255'), true);
+    for (const host of ['256.1.1.1', '1.2.3', '1.2.3.4.5', '01.2.3.4', '1.2.3.04', 'a'.repeat(64) + '.example'])
+        assert.notEqual(t.options.access_host.validate('main', host), true);
     assert.equal(t.options.public_url.validate('main', 'https://sub.example.test'), true);
+    assert.equal(t.options.public_url.validate('main', 'https://192.168.1.1'), true);
+    assert.notEqual(t.options.public_url.validate('main', 'https://' + 'a'.repeat(64) + '.example'), true);
     assert.notEqual(t.options.public_url.validate('main', 'https://bad..example.test'), true);
+    assert.notEqual(t.options.public_url.validate('main', 'https://256.1.1.1'), true);
     assert.match(source, /document\.hidden/);
     assert.match(source, /runtime-log.*maintenance-log/s);
 });

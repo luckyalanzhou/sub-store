@@ -101,7 +101,7 @@ docker() {
         stop) MOCK_CONTAINER_RUNNING=false; return 0 ;;
         start) MOCK_CONTAINER_RUNNING=true; return 0 ;;
         pause) [ "${MOCK_PAUSE_FAIL:-0}" != 1 ] || return 1 ;;
-        unpause) return 0 ;;
+        unpause) [ "${MOCK_UNPAUSE_FAIL:-0}" != 1 ] || return 1 ;;
         rm|rename) return 0 ;;
         *) return 1 ;;
     esac
@@ -132,6 +132,21 @@ if (ACCESS_HOST="$long_access_host"; valid_config) >/dev/null 2>&1; then
     echo 'An access hostname longer than 253 characters was accepted.' >&2
     exit 1
 fi
+long_host_label="$(awk 'BEGIN { for (i = 0; i < 64; i++) printf "a" }')"
+if (ACCESS_HOST="$long_host_label.example"; valid_config) >/dev/null 2>&1; then
+    echo 'An access hostname label longer than 63 characters was accepted.' >&2
+    exit 1
+fi
+valid_host_label="$(awk 'BEGIN { for (i = 0; i < 63; i++) printf "a" }')"
+(ACCESS_HOST="$valid_host_label.example"; valid_config)
+for invalid_access_host in 256.1.1.1 1.2.3 1.2.3.4.5 01.2.3.4 1.2.3.04; do
+    if (ACCESS_HOST="$invalid_access_host"; valid_config) >/dev/null 2>&1; then
+        echo "An invalid IPv4 access host was accepted: $invalid_access_host" >&2
+        exit 1
+    fi
+done
+(ACCESS_HOST=0.0.0.0; valid_config)
+(ACCESS_HOST=255.255.255.255; valid_config)
 expected="http://$ACCESS_HOST:8081/?api=http%3A%2F%2F$ACCESS_HOST%3A8081%2F$API_PATH"
 [ "$(show_url)" = "$expected" ]
 [ "$(show_api_url)" = "http://$ACCESS_HOST:8080/$API_PATH" ]
@@ -141,6 +156,11 @@ PUBLIC_URL='https://sub.example.test/a&b+c=d'
 [ "$(show_url)" = "https://sub.example.test/a&b+c=d/?api=https%3A%2F%2Fsub.example.test%2Fa%26b%2Bc%3Dd%2F$API_PATH" ]
 printf '%s' "$(frontend_cors_origins)" | grep -Fq 'https://sub.example.test'
 PUBLIC_URL=""
+if (PUBLIC_URL=https://256.1.1.1; valid_config) >/dev/null 2>&1; then
+    echo 'A public URL with an invalid IPv4 host was accepted.' >&2
+    exit 1
+fi
+(PUBLIC_URL=https://192.168.1.1; valid_config)
 MOCK_CONTAINER=1
 MOCK_FRONTEND_MAPPING=9091
 MOCK_BACKEND_MAPPING=9090
@@ -280,6 +300,30 @@ for temporary_export in "$TEST_DIR"/.sub-store-export.*; do
         exit 1
     }
 done
+unpause_fail_target="$TEST_DIR/unpause-failed-export.tar.gz"
+printf '%s\n' 'previous backup' > "$unpause_fail_target"
+MOCK_UNPAUSE_FAIL=1
+: > "$DOCKER_LOG"
+if (export_data "$unpause_fail_target") > "$TEST_DIR/unpause-failed-output" 2>&1; then
+    echo 'An export reported success after Docker could not unpause the container.' >&2
+    exit 1
+fi
+MOCK_UNPAUSE_FAIL=0
+grep -Fq 'export was saved, but sub-store could not be unpaused' "$TEST_DIR/unpause-failed-output" || {
+    cat "$TEST_DIR/unpause-failed-output" >&2
+    echo 'The failed container resume was not reported after saving the export.' >&2
+    exit 1
+}
+tar -tzf "$unpause_fail_target" | grep -Eq '(^|/)storage.json$'
+[ "$(grep -Fc 'unpause sub-store' "$DOCKER_LOG")" -ge 2 ] || {
+    cat "$DOCKER_LOG" >&2
+    echo 'The export cleanup did not retry unpausing the container.' >&2
+    exit 1
+}
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *) [ "$(stat -c '%a' "$unpause_fail_target")" = 600 ] ;;
+esac
 if ln -s "$VOLUME_PATH" "$TEST_DIR/export-volume-alias" 2>/dev/null &&
     [ -L "$TEST_DIR/export-volume-alias" ]; then
     MOCK_CONTAINER_RUNNING=false

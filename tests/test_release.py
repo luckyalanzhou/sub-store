@@ -21,6 +21,21 @@ class RunReleaseTests(unittest.TestCase):
         digest = hashlib.sha256(content).hexdigest()
         (directory / f"{name}.sha256").write_text(f"{digest}  {name}\n", encoding="ascii")
 
+    def test_release_workflow_is_manual_and_serialized(self) -> None:
+        workflow = (ROOT / ".github/workflows/build-run.yml").read_text(encoding="utf-8")
+        prepare_start = workflow.index("  prepare-release:\n")
+        build_start = workflow.index("  build:\n", prepare_start)
+        prepare_job = workflow[prepare_start:build_start]
+        build_job = workflow[build_start:]
+
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", prepare_job)
+        self.assertIn(
+            "if: github.event_name == 'workflow_dispatch' && needs.prepare-release.outputs.already_complete != 'true'",
+            build_job,
+        )
+        self.assertIn("  group: sub-store-release\n", workflow)
+        self.assertIn("  cancel-in-progress: false\n", workflow)
+
     def test_release_contains_only_run_installer_and_checksum(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             directory = Path(temp)
