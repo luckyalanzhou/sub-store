@@ -39,7 +39,9 @@ exec "$REAL_DD" "$@"
 EOF
 cat > "$TMP/bin/chmod" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$*" >> "$CHMOD_LOG"
+if [ "${LOG_CHMOD_CALLS:-0}" = 1 ]; then
+    printf '%s\n' "$*" >> "$CHMOD_LOG"
+fi
 exec "$REAL_CHMOD" "$@"
 EOF
 cat > "$TMP/bin/stat" <<'EOF'
@@ -52,7 +54,11 @@ EOF
 "$REAL_CHMOD" +x "$TMP/bin/chmod"
 "$REAL_CHMOD" +x "$TMP/bin/stat"
 "$REAL_CHMOD" +x "$TMP/bin/dd"
-export REAL_CHMOD REAL_STAT REAL_DD CHMOD_LOG="$TMP/chmod.log"
+LOG_CHMOD_CALLS=0
+case "$(uname -s)" in
+    MINGW*|MSYS*) LOG_CHMOD_CALLS=1 ;;
+esac
+export REAL_CHMOD REAL_STAT REAL_DD CHMOD_LOG="$TMP/chmod.log" LOG_CHMOD_CALLS
 PATH="$TMP/bin:$PATH"
 export PATH
 sed -e "s|STATE=/tmp/sub-store-operation|STATE=$TMP/state|" \
@@ -83,12 +89,15 @@ report_worker_timeout() {
     case "$worker_pid" in
         ''|*[!0-9]*) ;;
         *)
-            ps >&2 || true
-            if [ -r "/proc/$worker_pid/wchan" ]; then
-                printf 'worker wait channel: ' >&2
-                cat "/proc/$worker_pid/wchan" >&2
-                printf 'worker file descriptors:\n' >&2
-                ls -l "/proc/$worker_pid/fd" >&2 || true
+            if [ -r "/proc/$worker_pid/status" ]; then
+                for process_id in "$worker_pid" $(cat "/proc/$worker_pid/task/$worker_pid/children" 2>/dev/null); do
+                    printf 'process %s: ' "$process_id" >&2
+                    tr '\000' ' ' < "/proc/$process_id/cmdline" >&2 2>/dev/null || true
+                    printf '\nwait channel: ' >&2
+                    cat "/proc/$process_id/wchan" >&2 2>/dev/null || true
+                    printf '\nfile descriptors:\n' >&2
+                    ls -l "/proc/$process_id/fd" >&2 2>/dev/null || true
+                done
             fi
             ;;
     esac
