@@ -43,6 +43,25 @@ plugin_target_path() {
     printf '%s/%s\n' "${PLUGIN_TARGET_PREFIX%/}" "$1"
 }
 
+is_versioned_luci_view() {
+    printf '%s\n' "$1" | grep -Eq '^manage_[0-9]+_[0-9]+_[0-9]+\.js$'
+}
+
+cleanup_stale_luci_views() {
+    view_dir="$(plugin_target_path www/luci-static/resources/view/sub-store)"
+    current_view="manage_$(printf '%s' "$PACKAGE_VERSION" | tr '.' '_').js"
+    legacy_view="$view_dir/manage.js"
+    [ ! -f "$legacy_view" ] || rm -f "$legacy_view" || return 1
+    for view_path in "$view_dir"/manage_*.js; do
+        [ -f "$view_path" ] || continue
+        view_name="${view_path##*/}"
+        [ "$view_name" = "$current_view" ] && continue
+        if is_versioned_luci_view "$view_name"; then
+            rm -f "$view_path" || return 1
+        fi
+    done
+}
+
 refresh_luci_cache() {
     rm -f /tmp/luci-indexcache*
     rm -rf /tmp/luci-modulecache
@@ -89,6 +108,15 @@ prepare_plugin_rollback() {
         ./usr/lib/lua/luci/controller/sub_store.lua \
         ./usr/lib/lua/luci/model/cbi/sub_store.lua \
         ./usr/lib/sub-store/check-update >> "$PLUGIN_BACKUP_DIR/manifest"
+    existing_view_dir="$(plugin_target_path www/luci-static/resources/view/sub-store)"
+    for existing_view in "$existing_view_dir"/manage_*.js; do
+        [ -f "$existing_view" ] || continue
+        existing_view_name="${existing_view##*/}"
+        if is_versioned_luci_view "$existing_view_name"; then
+            printf './www/luci-static/resources/view/sub-store/%s\n' "$existing_view_name" \
+                >> "$PLUGIN_BACKUP_DIR/manifest"
+        fi
+    done
     sort -u "$PLUGIN_BACKUP_DIR/manifest" -o "$PLUGIN_BACKUP_DIR/manifest"
     while IFS= read -r package_path; do
         relative_path="${package_path#./}"
@@ -193,6 +221,7 @@ if [ "$PLUGIN_ONLY" = "1" ]; then
     done
     PLUGIN_DEST="${PLUGIN_TARGET_PREFIX:-/}"
     (umask 022; cp -R "$PACKAGE_DIR/root/." "$PLUGIN_DEST") || fail "Cannot copy updated LuCI plugin files."
+    cleanup_stale_luci_views || fail "Cannot remove outdated LuCI view files."
     . /usr/lib/sub-store/permissions.sh
     sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
     chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
@@ -277,6 +306,7 @@ step 4 "安装管理界面并准备配置"
 FULL_INSTALL_ACTIVE=1
 prepare_plugin_rollback
 (umask 022; cp -R "$PACKAGE_DIR/root/." /)
+cleanup_stale_luci_views || fail "Cannot remove outdated LuCI view files."
 . /usr/lib/sub-store/permissions.sh
 sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
 chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \

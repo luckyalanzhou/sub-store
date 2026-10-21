@@ -6,6 +6,8 @@ TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 awk '
     /^plugin_target_path\(\) \{/ { copy=1 }
+    /^is_versioned_luci_view\(\) \{/ { copy=1 }
+    /^cleanup_stale_luci_views\(\) \{/ { copy=1 }
     /^rollback_plugin_update\(\) \{/ { copy=1 }
     /^prepare_plugin_rollback\(\) \{/ { copy=1 }
     /^commit_plugin_update\(\) \{/ { copy=1 }
@@ -65,4 +67,65 @@ rollback_plugin_update
 [ "$(cat "$PLUGIN_TARGET_PREFIX/etc/config/sub-store")" = old-config ]
 [ "$(cat "$PLUGIN_TARGET_PREFIX/etc/sub-store/version")" = old-version ]
 [ ! -e "$PLUGIN_TARGET_PREFIX/etc/sub-store/installed" ]
+
+PACKAGE_DIR="$TEST_DIR/versioned-package"
+PLUGIN_TARGET_PREFIX="$TEST_DIR/versioned-root"
+PLUGIN_BACKUP_DIR=""
+PLUGIN_UPDATE_ACTIVE=0
+PACKAGE_VERSION=0.0.23
+VIEW_REL=www/luci-static/resources/view/sub-store
+mkdir -p "$PACKAGE_DIR/root/$VIEW_REL" "$PLUGIN_TARGET_PREFIX/$VIEW_REL"
+printf '%s\n' current > "$PACKAGE_DIR/root/$VIEW_REL/manage_0_0_23.js"
+printf '%s\n' new-base > "$PACKAGE_DIR/root/$VIEW_REL/manage.js"
+printf '%s\n' old-base > "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage.js"
+printf '%s\n' old-21 > "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_21.js"
+printf '%s\n' old-22 > "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_22.js"
+printf '%s\n' custom > "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_custom.js"
+
+# Removed old views must be included in rollback state and restored if a later install step fails.
+prepare_plugin_rollback
+cp -R "$PACKAGE_DIR/root/." "$PLUGIN_TARGET_PREFIX/"
+cleanup_stale_luci_views
+[ ! -e "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_21.js" ]
+[ ! -e "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_22.js" ]
+[ -f "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_23.js" ]
+rollback_plugin_update
+[ "$(cat "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_21.js")" = old-21 ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_22.js")" = old-22 ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage.js")" = old-base ]
+[ ! -e "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_23.js" ]
+
+# A removal error after partial cleanup must fail the update and restore every old view.
+prepare_plugin_rollback
+cp -R "$PACKAGE_DIR/root/." "$PLUGIN_TARGET_PREFIX/"
+rm() {
+    case "$*" in
+        *manage_0_0_22.js*) return 1 ;;
+        *) command rm "$@" ;;
+    esac
+}
+if cleanup_stale_luci_views; then
+    echo 'Cleanup unexpectedly succeeded after an injected removal failure.' >&2
+    exit 1
+fi
+unset -f rm
+[ ! -e "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_21.js" ]
+[ -f "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_22.js" ]
+rollback_plugin_update
+[ "$(cat "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage.js")" = old-base ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_21.js")" = old-21 ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_22.js")" = old-22 ]
+[ ! -e "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_23.js" ]
+
+# A successful update keeps only the current generated view and removes the legacy and stale generated views.
+prepare_plugin_rollback
+cp -R "$PACKAGE_DIR/root/." "$PLUGIN_TARGET_PREFIX/"
+cleanup_stale_luci_views
+commit_plugin_update
+[ ! -e "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_21.js" ]
+[ ! -e "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_22.js" ]
+[ -f "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_0_0_23.js" ]
+[ ! -e "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage.js" ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/$VIEW_REL/manage_custom.js")" = custom ]
+
 echo 'Plugin update rollback and recovery retention checks passed.'
