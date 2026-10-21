@@ -2,12 +2,10 @@
 'require view';
 'require form';
 'require uci';
-'require rpc';
 'require fs';
 'require ui';
 'require poll';
 
-const commit = rpc.declare({ object: 'uci', method: 'commit', params: ['config'], expect: { '': 0 } });
 const names = { running: '运行中', exited: '已停止', stopped: '已停止', restarting: '正在重启',
     maintenance: '正在维护', 'docker-unavailable': 'Docker 不可用', 'not-created': '容器尚未创建' };
 function validCron(value) {
@@ -145,11 +143,8 @@ return view.extend({
             s.container === 'running' ? 'sub-store 服务已启动' :
                 'sub-store 服务状态：' + (names[s.container] || s.container || '状态未知');
         this.version.textContent = s.version || '未知';
-        this.address.value = s.url || '';
         this.open.href = s.url || '#';
         this.open.hidden = !s.url || s.container !== 'running';
-        this.copyAddressButton.disabled = !s.url;
-        this.storage.value = s.storage || '实际路径暂不可用';
         const image = String(s.image || '').split(/\s+\/\s+/, 1);
         this.image.textContent = image[0] || '容器镜像未就绪';
         this.appVersion.textContent = s.app_version || '容器日志未提供版本号';
@@ -325,20 +320,21 @@ return view.extend({
         this.setBusy(true);
         try {
             await this.map.save(null, true);
-            const result = await commit('sub-store');
-            if (result && result !== 0) throw new Error('提交设置失败');
-            await ui.changes.init();
-            ui.addNotification(null, E('p', {}, ['设置已保存；点击保存并应用或重启后生效。']), 'info');
+            ui.addNotification(null, E('p', {}, ['设置已保存；尚未应用。']), 'info');
         } finally { this.setBusy(false); }
     },
     handleSaveApply: async function() {
-        await this.handleSave();
+        if (this.localBusy || this.state.busy) throw new Error('请等待维护操作完成后再保存。');
+        this.setBusy(true);
+        try {
+            await this.map.save(null, true);
+            await ui.changes.apply();
+        } finally { this.setBusy(false); }
         this.reloadAfterTask = true;
         this.reloadTaskAccepted = false;
         try {
             await this.run('restart');
             await this.enqueueTask;
-            await ui.changes.apply();
         }
         catch (error) { this.reloadAfterTask = false; throw error; }
     },
@@ -348,17 +344,9 @@ return view.extend({
         this.buttons = [];
         this.status = E('span');
         this.version = E('span');
-        this.address = E('input', { id: 'sub-store-management-address', 'class': 'cbi-input-text', readonly: true,
-            'aria-label': '访问地址' });
         this.open = E('a', { 'class': 'btn small cbi-button cbi-button-positive', target: '_blank', rel: 'noopener noreferrer' }, ['打开']);
-        this.copyAddressButton = E('button', { type: 'button', 'class': 'cbi-button', 'aria-label': '复制访问地址', click: ui.createHandlerFn(this, async function() {
-            if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(this.address.value);
-            else {
-                this.address.focus(); this.address.select();
-                if (!document.execCommand('copy')) throw new Error('自动复制不可用，请复制已选中的链接。');
-            }
-            ui.addNotification(null, E('p', {}, ['管理链接已复制。']), 'info');
-        }) }, ['复制']);
+        this.open.textContent = '打开Sub-Store';
+        this.open.setAttribute('aria-label', '打开Sub-Store管理界面');
         this.startButton = this.button('启动', 'start');
         this.stopButton = this.button('停止', 'stop', 'negative');
         this.restartButton = this.button('重启', 'restart');
@@ -379,9 +367,7 @@ return view.extend({
             return option;
         };
         displayOverview('_service_status', '服务状态', this.status);
-        displayOverview('_management_address', '管理地址', E('div', {}, [
-            this.address, ' ', this.open, ' ', this.copyAddressButton
-        ]));
+        displayOverview('_management_address', '管理地址', E('div', {}, [this.open]));
         displayOverview('_service_control', '服务控制', E('div', {}, [
             this.startButton, ' ', this.stopButton, ' ', this.restartButton
         ]));
@@ -415,11 +401,9 @@ return view.extend({
         o = s.taboption('basic', form.Value, 'api_path', 'API 密钥');
         o.password = true; o.rmempty = false;
         o.validate = function(section, value) { return /^[a-fA-F0-9]{48}$/.test(value) || '请输入 48 位十六进制字符。'; };
-        o = s.taboption('basic', form.Value, 'sync_cron', '同步计划');
+        o = s.taboption('basic', form.Value, 'sync_cron', 'Cron 表达式');
         o.default = '55 23 * * *'; o.rmempty = false;
         o.validate = function(section, value) { return validCron(value) || 'Cron 格式或字段范围不正确。'; };
-        this.storage = E('input', { 'class': 'cbi-input-text', readonly: true, 'aria-label': '实际数据存储路径' });
-        display('basic', '_storage', '实际数据存储路径', this.storage);
         this.image = E('span');
         this.appVersion = E('span');
         this.updateStatus = E('span', { 'aria-live': 'polite' });

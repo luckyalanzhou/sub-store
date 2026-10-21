@@ -53,9 +53,8 @@ function setup() {
         async load() {}
         async reset() {}
     }
-    const rpc = { declare: () => async config => { calls.push(['commit', config]); return 0; } };
     const view = new Function('view', 'form', 'uci', 'rpc', 'fs', 'ui', 'poll', 'E', source)(
-        { extend: value => value }, { Map, NamedSection: 1, Value: 2, DummyValue: 3 }, uci, rpc, backend, ui,
+        { extend: value => value }, { Map, NamedSection: 1, Value: 2, DummyValue: 3 }, uci, {}, backend, ui,
         { add: fn => polls.push(fn) }, E);
     return { view, options, calls, state, backend, polls, rootLogTab };
 }
@@ -72,7 +71,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.deepEqual(t.view.map.sections[1].options.filter(option => option.tab === 'basic').map(option => option.name), [
         'frontend_port', 'access_host', 'public_url',
         'backend_port', 'backend_lan_access', '_api',
-        'api_path', 'sync_cron', '_storage'
+        'api_path', 'sync_cron'
     ]);
     for (const id of ['_service_status', '_management_address', '_service_control'])
         assert.equal(t.options[id].tab, undefined);
@@ -82,20 +81,20 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.options.frontend_port.tab, 'basic');
     assert.equal(t.options.public_url.tab, 'basic');
     assert.equal(t.options.backend_port.tab, 'basic');
+    assert.equal(t.options.sync_cron.label, 'Cron 表达式');
     assert.equal(t.options.log_max_size_mb, undefined);
     assert.equal(t.options.log_max_files, undefined);
     assert.equal(t.options.api_path.password, true);
     assert.equal(t.options.backend_lan_access.default, '0');
     assert.equal(t.polls.length, 1);
     assert.equal(t.view.open.href, t.state.url);
-    assert.equal(t.view.open.children[0], '打开');
+    assert.equal(t.view.open.textContent, '打开Sub-Store');
+    assert.equal(t.view.open['aria-label'], '打开Sub-Store管理界面');
     assert.equal(t.view.open.class, 'btn small cbi-button cbi-button-positive');
-    assert.equal(t.view.address['aria-label'], '访问地址');
-    assert.equal(t.view.copyAddressButton.children[0], '复制');
-    assert.equal(t.view.copyAddressButton['aria-label'], '复制访问地址');
-    assert.equal(t.view.copyAddressButton.disabled, false);
     const addressControl = t.options._management_address.renderWidget();
-    assert.deepEqual(addressControl.children, [t.view.address, ' ', t.view.open, ' ', t.view.copyAddressButton]);
+    assert.deepEqual(addressControl.children, [t.view.open]);
+    assert.equal(t.view.address, undefined);
+    assert.equal(t.view.copyAddressButton, undefined);
     assert.equal(t.view.status.textContent, 'sub-store 服务已启动');
     assert.equal(t.view.version.textContent, 'test');
     assert.equal(t.view.updateStatus.textContent, '');
@@ -108,7 +107,8 @@ test('native page groups settings, masks key and schedules status polling', asyn
     t.view.state.image = 'xream/sub-store:latest / sha256:abcdef0123456789';
     t.view.paint();
     assert.equal(t.view.image.textContent, 'xream/sub-store:latest');
-    assert.equal(t.view.storage.value, t.state.storage);
+    assert.equal(t.options._storage, undefined);
+    assert.equal(t.view.storage, undefined);
     for (const id of ['_plugin_version', '_image', '_app_version', '_updates', '_rotate'])
         assert.equal(t.options[id].tab, 'maintenance');
     assert.equal(t.options._maintenance, undefined);
@@ -249,21 +249,25 @@ test('image-only update does not reload the LuCI page', async () => {
         else global.window = previousWindow;
     }
 });
-test('save-and-apply commits, enqueues restart and applies staged LuCI changes', async () => {
+test('save-and-apply applies staged LuCI changes before restarting the service', async () => {
     const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
     await t.view.handleSaveApply();
     const index = name => t.calls.findIndex(call => call[0] === name);
-    assert.ok(index('save') < index('commit'));
-    assert.ok(index('commit') < index('/usr/lib/sub-store/job.sh'));
-    assert.ok(index('/usr/lib/sub-store/job.sh') < index('apply'));
+    assert.ok(index('save') < index('apply'));
+    assert.ok(index('apply') < index('/usr/lib/sub-store/job.sh'));
     assert.deepEqual(t.calls[index('/usr/lib/sub-store/job.sh')][1], ['--enqueue', 'restart']);
     assert.equal(t.calls.filter(call => call[0] === 'apply').length, 1);
+});
+test('save stages settings without applying them or restarting the service', async () => {
+    const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
+    await t.view.handleSave();
+    assert.deepEqual(t.calls.map(call => call[0]), ['save', 'notice']);
 });
 test('invalid settings prevent commit and service restart', async () => {
     const t = setup(); await t.view.render(await t.view.load()); t.calls.length = 0;
     t.view.map.save = async () => { throw new Error('invalid'); };
     await assert.rejects(t.view.handleSaveApply(), /invalid/);
-    assert.equal(t.calls.some(call => call[0] === 'commit' || call[0] === 'apply' || call[0].endsWith('job.sh')), false);
+    assert.equal(t.calls.some(call => call[0] === 'apply' || call[0].endsWith('job.sh')), false);
     assert.equal(t.view.localBusy, false);
 });
 test('running task prevents save and competing operation', async () => {
