@@ -23,6 +23,15 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 cp -R "$PAYLOAD" "$TMP/payload"
+VIEW_DIR="$TMP/payload/root/www/luci-static/resources/view/sub-store"
+MENU_FILE="$TMP/payload/root/usr/share/luci/menu.d/luci-app-sub-store.json"
+VERSIONED_VIEW="manage_$(printf '%s' "$VERSION" | tr '.' '_')"
+cp "$VIEW_DIR/manage.js" "$VIEW_DIR/$VERSIONED_VIEW.js"
+sed -i "s#\"path\": \"sub-store/manage\"#\"path\": \"sub-store/$VERSIONED_VIEW\"#" "$MENU_FILE"
+grep -Fq "\"path\": \"sub-store/$VERSIONED_VIEW\"" "$MENU_FILE" || {
+    echo "Could not set the versioned LuCI view path" >&2
+    exit 1
+}
 # Normalize archive permissions even when the runner uses a restrictive umask.
 find "$TMP/payload" -type d -exec chmod 755 {} +
 find "$TMP/payload" -type f -exec chmod 644 {} +

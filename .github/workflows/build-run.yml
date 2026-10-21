@@ -275,8 +275,12 @@ jobs:
           extracted="$(mktemp -d)"
           trap 'rm -rf "$extracted"' EXIT
           "$package" --noexec --target "$extracted"
+          versioned_view="manage_$(printf '%s' "$VERSION" | tr '.' '_').js"
+          view_path="sub-store/${versioned_view%.js}"
           test "$(stat -c '%a' "$extracted/root/www/luci-static/resources/view/sub-store")" = 755
           test "$(stat -c '%a' "$extracted/root/www/luci-static/resources/view/sub-store/manage.js")" = 644
+          test "$(stat -c '%a' "$extracted/root/www/luci-static/resources/view/sub-store/$versioned_view")" = 644
+          grep -Fq "\"path\": \"$view_path\"" "$extracted/root/usr/share/luci/menu.d/luci-app-sub-store.json"
           test "$(stat -c '%a' "$extracted/root/usr/lib/sub-store/app-version.js")" = 644
 
           set +e

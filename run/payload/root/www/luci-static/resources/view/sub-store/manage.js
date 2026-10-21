@@ -366,8 +366,7 @@ return view.extend({
             option.renderWidget = function() { return node; };
             return option;
         };
-        displayOverview('_service_status', '服务状态', this.status);
-        displayOverview('_management_address', '管理地址', E('div', {}, [this.open]));
+        displayOverview('_service_status', '服务状态', E('div', {}, [this.status, ' ', this.open]));
         displayOverview('_service_control', '服务控制', E('div', {}, [
             this.startButton, ' ', this.stopButton, ' ', this.restartButton
         ]));

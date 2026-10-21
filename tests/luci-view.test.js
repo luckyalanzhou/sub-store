@@ -64,7 +64,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.deepEqual(t.view.map.args, ['sub-store', 'sub-store']);
     assert.equal(t.view.map.sections.length, 2);
     assert.deepEqual(t.view.map.sections[0].options.map(option => option.name), [
-        '_service_status', '_management_address', '_service_control'
+        '_service_status', '_service_control'
     ]);
     assert.equal(t.view.map.sections[0].args[3], '服务概览');
     assert.deepEqual(t.view.map.sections[1].tabs.map(tab => tab.name), ['basic', 'logs', 'maintenance']);
@@ -73,7 +73,7 @@ test('native page groups settings, masks key and schedules status polling', asyn
         'backend_port', 'backend_lan_access', '_api',
         'api_path', 'sync_cron'
     ]);
-    for (const id of ['_service_status', '_management_address', '_service_control'])
+    for (const id of ['_service_status', '_service_control'])
         assert.equal(t.options[id].tab, undefined);
     assert.equal(t.options._management_ui, undefined);
     assert.equal(t.options._created, undefined);
@@ -91,8 +91,9 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.open.textContent, '打开Sub-Store');
     assert.equal(t.view.open['aria-label'], '打开Sub-Store管理界面');
     assert.equal(t.view.open.class, 'btn small cbi-button cbi-button-positive');
-    const addressControl = t.options._management_address.renderWidget();
-    assert.deepEqual(addressControl.children, [t.view.open]);
+    const statusControl = t.options._service_status.renderWidget();
+    assert.deepEqual(statusControl.children, [t.view.status, ' ', t.view.open]);
+    assert.equal(t.options._management_address, undefined);
     assert.equal(t.view.address, undefined);
     assert.equal(t.view.copyAddressButton, undefined);
     assert.equal(t.view.status.textContent, 'sub-store 服务已启动');
