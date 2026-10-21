@@ -2,6 +2,7 @@
 set -eu
 
 PACKAGE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+. "$PACKAGE_DIR/lib/package-manager.sh"
 LOG=/tmp/sub-store-run-install.log
 LOG_MAX_BYTES=1048576
 INSTALL_STEP="准备安装"
@@ -125,16 +126,26 @@ finish() {
 trap finish EXIT
 step 1 "检查系统与安装依赖"
 [ "$(id -u)" = "0" ] || fail "Run the .run installer as root."
-command -v opkg >/dev/null 2>&1 || fail "This build requires an opkg-based iStoreOS/OpenWrt 24.10.x system."
 [ -d /etc ] || fail "Cannot find the system configuration directory."
 PLUGIN_ONLY="${SUB_STORE_PLUGIN_ONLY:-0}"
 
 if [ -r /etc/openwrt_release ]; then
     . /etc/openwrt_release
     case "${DISTRIB_RELEASE:-}" in
-        24.10*) ;;
-        *) say "WARNING: built for 24.10.x; detected ${DISTRIB_RELEASE:-unknown}. Continuing with best-effort compatibility." ;;
+        24.10*|25.12*) ;;
+        *) say "WARNING: intended for iStoreOS 24.10.x and 25.12.x; detected ${DISTRIB_RELEASE:-unknown}. Continuing with best-effort compatibility." ;;
     esac
+fi
+
+if ! detect_package_manager; then
+    fail "This installer requires iStoreOS/OpenWrt with opkg or apk."
+fi
+
+if ! command -v jsonfilter >/dev/null 2>&1; then
+    say "Installing required jsonfilter package..."
+    package_manager_update || fail "Could not refresh package feeds to install jsonfilter."
+    package_manager_install jsonfilter || fail "Could not install jsonfilter from the configured package feeds."
+    command -v jsonfilter >/dev/null 2>&1 || fail "jsonfilter is still unavailable after package installation."
 fi
 
 if [ "$PLUGIN_ONLY" = "1" ]; then
@@ -144,9 +155,9 @@ if [ "$PLUGIN_ONLY" = "1" ]; then
         fail "LuCI status dependencies are unavailable; reinstall the full package."
 else
     if ! command -v docker >/dev/null 2>&1; then
-        say "Installing Docker from the configured opkg feeds..."
-        opkg update
-        opkg install dockerd docker
+        say "Installing Docker from the configured $PACKAGE_MANAGER feeds..."
+        package_manager_update || fail "Could not refresh package feeds to install Docker."
+        package_manager_install dockerd docker || fail "Could not install Docker from the configured package feeds."
     fi
 
     command -v docker >/dev/null 2>&1 || fail "Docker CLI is still unavailable after package installation."
@@ -155,10 +166,11 @@ else
     if [ ! -f /www/luci-static/resources/form.js ] || ! command -v lua >/dev/null 2>&1 ||
         ! lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 ||
         ! command -v curl >/dev/null 2>&1 ||
-        ! opkg status rpcd-mod-file 2>/dev/null | grep -q 'Status:.*installed'; then
+        ! package_is_installed rpcd-mod-file; then
         say "Installing native LuCI and RPC dependencies..."
-        opkg update
-        opkg install luci-base lua luci-lib-base luci-lib-jsonc rpcd-mod-file curl
+        package_manager_update || fail "Could not refresh package feeds to install LuCI dependencies."
+        package_manager_install luci-base lua luci-lib-base luci-lib-jsonc rpcd-mod-file curl ||
+            fail "Could not install LuCI dependencies from the configured package feeds."
     fi
     [ -f /www/luci-static/resources/form.js ] || fail "LuCI JavaScript form support is unavailable."
     lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 || fail "LuCI status dependencies are unavailable."
@@ -391,6 +403,10 @@ else
     say "New deployment failed."
     exit 1
 fi
+
+container_status="$(/usr/bin/sub-storectl status 2>/dev/null || true)"
+[ "$container_status" = "running" ] ||
+    fail "sub-store did not start successfully (container status: ${container_status:-unknown})."
 
 uci -q delete sub-store.main.data_dir >/dev/null 2>&1 || true
 uci -q delete sub-store.main.port >/dev/null 2>&1 || true

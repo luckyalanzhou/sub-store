@@ -2,7 +2,6 @@
 
 START=99
 STOP=10
-USE_PROCD=0
 
 start() {
     /usr/bin/sub-storectl start

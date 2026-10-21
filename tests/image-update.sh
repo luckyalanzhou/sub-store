@@ -348,6 +348,10 @@ for install_case in fresh cached pull-failed managed existing; do
         }
         test_ctl() {
             printf 'ctl %s\n' "$*" >> "$TEST_DIR/installer.log"
+            if [ "$1" = status ]; then
+                printf 'running\n'
+                return 0
+            fi
             if [ "$1" = pull ]; then
                 [ "$install_case" != pull-failed ] || return 1
             fi

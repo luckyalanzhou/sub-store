@@ -114,7 +114,7 @@ jobs:
           mkdir -p dist
           {
             printf '# sub-store v%s\n\n' "$VERSION"
-            printf '安装包：iStoreOS 24.10 `.run` 自解压安装器，附 SHA-256 校验文件。首次启动需要联网拉取官方镜像。\n\n'
+            printf '安装包：iStoreOS 24.10.x（opkg）和 25.12.x（apk）的 `.run` 自解压安装器，附 SHA-256 校验文件。首次启动需要联网拉取官方镜像。\n\n'
             printf '## 优化内容\n\n'
             index=0
             if [[ -n "$PREVIOUS_TAG" ]]; then
@@ -158,6 +158,7 @@ jobs:
           for script in \
             scripts/build-run.sh \
             run/payload/install.sh \
+            run/payload/lib/package-manager.sh \
             run/payload/root/etc/init.d/sub-store \
             run/payload/root/usr/bin/sub-storectl \
             run/payload/root/usr/lib/sub-store/cron.sh \
@@ -165,6 +166,8 @@ jobs:
             run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
+            tests/service-init.sh \
+            tests/package-manager.sh \
             tests/plugin-install-rollback.sh \
             tests/operation-feedback.sh \
             tests/cron-validation.sh \
@@ -186,6 +189,7 @@ jobs:
           for script in \
             scripts/build-run.sh \
             run/payload/install.sh \
+            run/payload/lib/package-manager.sh \
             run/payload/root/etc/init.d/sub-store \
             run/payload/root/usr/bin/sub-storectl \
             run/payload/root/usr/lib/sub-store/cron.sh \
@@ -193,6 +197,8 @@ jobs:
             run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
+            tests/service-init.sh \
+            tests/package-manager.sh \
             tests/plugin-install-rollback.sh \
             tests/operation-feedback.sh \
             tests/cron-validation.sh \
@@ -222,6 +228,8 @@ jobs:
           busybox ash tests/image-update.sh
           BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
           busybox ash tests/install-permissions.sh
+          busybox ash tests/service-init.sh
+          busybox ash tests/package-manager.sh
           busybox ash tests/plugin-install-rollback.sh
           busybox ash tests/plugin-update.sh
 
