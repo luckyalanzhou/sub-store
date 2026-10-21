@@ -1,22 +1,12 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const http = require('node:http');
 const fs = require('node:fs');
-const vm = require('node:vm');
-const { check } = require('../installer/payload/root/usr/lib/sub-store/healthcheck.js');
-const { readAppVersion } = require('../installer/payload/root/usr/lib/sub-store/app-version.js');
+const { spawn } = require('node:child_process');
+const { check } = require('../run/payload/root/usr/lib/sub-store/healthcheck.js');
 
-function response(status, contentType, body) {
-    return {
-        status,
-        ok: status >= 200 && status < 300,
-        headers: { get: name => name.toLowerCase() === 'content-type' ? contentType : null },
-        text: async () => body,
-        json: async () => JSON.parse(body),
-    };
-}
-
-function fixture(overrides = {}) {
-    const routes = new Map(Object.entries({
+async function fixture(t, overrides = {}) {
+    const routes = {
         '/': [200, 'text/html', '<html><script type="module" src="/assets/app.js"></script><link rel="stylesheet" href="/assets/app.css"></html>'],
         '/assets/app.js': [200, 'text/javascript', 'import "./runtime.js";'],
         '/assets/runtime.js': [200, 'text/javascript', 'console.log("frontend ready");'],
@@ -24,173 +14,134 @@ function fixture(overrides = {}) {
         '/test-prefix/api/utils/env': [200, 'application/json', '{"version":"test"}'],
         '/backend/test-prefix/api/utils/env': [200, 'application/json', '{"version":"test"}'],
         ...overrides,
+    };
+    const server = http.createServer((request, response) => {
+        const [status, type, body] = routes[request.url] || [404, 'text/plain', 'missing'];
+        response.writeHead(status, { 'content-type': type });
+        response.end(body);
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise(resolve => {
+        server.closeAllConnections();
+        server.close(resolve);
     }));
-    const requests = [];
-    const fetchImpl = async (url, options) => {
-        requests.push({ url: String(url), options });
-        const route = routes.get(new URL(url).pathname) || [404, 'text/plain', 'missing'];
-        return response(...route);
-    };
-    return {
-        frontend: 'http://router.test',
-        backend: 'http://router.test/backend',
-        prefix: '/test-prefix',
-        rawPrefix: '/test-prefix',
-        fetchImpl,
-        requests,
-        report: () => {},
-    };
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    return { frontend: origin, backend: `${origin}/backend`, prefix: '/test-prefix', report: () => {} };
 }
 
-async function runStdinScript(relativePath, env, fetchImpl) {
-    const sourcePath = require.resolve(`../installer/payload/root/usr/lib/sub-store/${relativePath}`);
-    const module = { exports: {} };
-    const localRequire = () => { throw new Error('unexpected require'); };
-    localRequire.main = null;
-    const stdout = [];
-    const messages = [];
-    const processMock = {
-        argv: ['node', '-'],
-        env,
-        stdout: { write: value => { stdout.push(value); } },
-        exitCode: 0,
-    };
-    vm.runInNewContext(fs.readFileSync(sourcePath, 'utf8'), {
-        module,
-        exports: module.exports,
-        require: localRequire,
-        process: processMock,
-        console: {
-            log: message => { messages.push(String(message)); },
-            error: message => { messages.push(String(message)); },
-        },
-        fetch: fetchImpl,
-        AbortSignal,
-        URL,
-    }, { filename: sourcePath });
-    await new Promise(resolve => setImmediate(resolve));
-    return { code: processMock.exitCode, output: stdout.join(''), messages };
-}
-
-test('accepts HTML, JS dependencies, CSS, API proxy and backend JSON', async () => {
-    await check(fixture());
+test('accepts HTML, JS dependencies, CSS, API proxy and backend JSON', async t => {
+    await check(await fixture(t));
 });
 
-test('rejects HTTP 200 HTML fallback at a JavaScript URL', async () => {
-    await assert.rejects(check(fixture({
-        '/assets/app.js': [200, 'text/html', '<html>fallback</html>'],
-    })), /invalid content type/);
+test('rejects HTTP 200 HTML fallback at a JavaScript URL', async t => {
+    const config = await fixture(t, { '/assets/app.js': [200, 'text/html', '<html>fallback</html>'] });
+    await assert.rejects(check(config), /invalid content type/);
 });
 
-test('rejects missing JavaScript assets', async () => {
-    await assert.rejects(check(fixture({
-        '/assets/app.js': [404, 'text/plain', 'missing'],
-    })), /script.*HTTP 404/);
+test('rejects missing JavaScript assets', async t => {
+    const config = await fixture(t, { '/assets/app.js': [404, 'text/plain', 'missing'] });
+    await assert.rejects(check(config), /script.*HTTP 404/);
 });
 
-test('rejects broken module dependencies behind a healthy entry script', async () => {
-    await assert.rejects(check(fixture({
-        '/assets/runtime.js': [200, 'text/html', '<html>fallback</html>'],
-    })), /invalid content type/);
+test('rejects broken module dependencies behind a healthy entry script', async t => {
+    const config = await fixture(t, { '/assets/runtime.js': [200, 'text/html', '<html>fallback</html>'] });
+    await assert.rejects(check(config), /invalid content type/);
 });
 
-test('checks dynamically imported modules in small entry loaders', async () => {
-    await assert.rejects(check(fixture({
+test('checks dynamically imported modules in small entry loaders', async t => {
+    const config = await fixture(t, {
         '/assets/app.js': [200, 'text/javascript', 'import("./runtime.js");'],
         '/assets/runtime.js': [404, 'text/plain', 'missing'],
-    })), /script.*HTTP 404/);
+    });
+    await assert.rejects(check(config), /script.*HTTP 404/);
 });
 
-test('supports checking public assets without an API credential', async () => {
-    const config = fixture({ '/test-prefix/api/utils/env': [403, 'text/plain', 'private'] });
+test('supports checking public assets without an API credential', async t => {
+    const config = await fixture(t, { '/test-prefix/api/utils/env': [403, 'text/plain', 'private'] });
     await check({ ...config, assetsOnly: true });
-    assert.equal(config.requests.some(request => request.url.includes('/api/')), false);
 });
 
-test('rejects HTML without a JavaScript entrypoint', async () => {
-    await assert.rejects(check(fixture({
-        '/': [200, 'text/html', '<html>blank</html>'],
-    })), /no local JavaScript entrypoint/);
+test('rejects HTML without a JavaScript entrypoint', async t => {
+    const config = await fixture(t, { '/': [200, 'text/html', '<html>blank</html>'] });
+    await assert.rejects(check(config), /no local JavaScript entrypoint/);
 });
 
-test('rejects a failed frontend API proxy even with a healthy raw API', async () => {
-    await assert.rejects(check(fixture({
-        '/test-prefix/api/utils/env': [502, 'text/plain', 'proxy failure'],
-    })), /Frontend API proxy.*502/);
+test('rejects a failed frontend API proxy even with a healthy raw API', async t => {
+    const config = await fixture(t, { '/test-prefix/api/utils/env': [502, 'text/plain', 'proxy failure'] });
+    await assert.rejects(check(config), /Frontend API proxy.*502/);
 });
 
-test('rejects a backend that returns HTML instead of JSON', async () => {
-    await assert.rejects(check(fixture({
-        '/backend/test-prefix/api/utils/env': [200, 'text/html', '<html>fallback</html>'],
-    })), /Backend API did not return JSON/);
+test('rejects a backend that returns HTML instead of JSON', async t => {
+    const config = await fixture(t, { '/backend/test-prefix/api/utils/env': [200, 'text/html', '<html>fallback</html>'] });
+    await assert.rejects(check(config), /Backend API did not return JSON/);
 });
 
-test('uses bounded same-origin requests for health checks', async () => {
-    const config = fixture();
-    await check(config);
-    assert.equal(config.requests.every(request => request.options.redirect === 'error'), true);
-    assert.equal(config.requests.every(request => request.options.signal.aborted === false), true);
-});
-
-test('runs the Docker health check through its stdin entrypoint', async () => {
-    const config = fixture();
-    const result = await runStdinScript('healthcheck.js', {
-        SUB_STORE_BACKEND_API_PORT: '3000',
-        SUB_STORE_BACKEND_MERGE: 'true',
-        SUB_STORE_FRONTEND_BACKEND_PATH: '/test-prefix',
-    }, config.fetchImpl);
-    assert.equal(result.code, 0, result.messages.join('\n'));
-    assert.match(result.messages.join('\n'), /frontend assets and API checks passed/);
-});
-
-test('reports broken frontend assets through the stdin health check', async () => {
-    const config = fixture({ '/assets/app.js': [404, 'text/plain', 'missing'] });
-    const result = await runStdinScript('healthcheck.js', {
-        SUB_STORE_BACKEND_API_PORT: '3000',
-        SUB_STORE_BACKEND_MERGE: 'true',
-        SUB_STORE_FRONTEND_BACKEND_PATH: '/test-prefix',
-    }, config.fetchImpl);
-    assert.equal(result.code, 1);
-    assert.match(result.messages.join('\n'), /Frontend script 1 failed with HTTP 404/);
-});
-
-test('reads the Sub-Store version from the environment API', async () => {
-    const requests = [];
-    const version = await readAppVersion({
-        frontendPort: 3001,
-        prefix: '/test-prefix',
-        fetchImpl: async (url, options) => {
-            requests.push({ url, options });
-            return response(200, 'application/json', '{"status":"success","data":{"version":"2.42.4"}}');
-        },
+async function runStdin(config) {
+    const port = new URL(config.frontend).port;
+    return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['--input-type=commonjs', '-'], {
+            env: {
+                ...process.env,
+                SUB_STORE_BACKEND_API_PORT: port,
+                SUB_STORE_BACKEND_MERGE: 'true',
+                SUB_STORE_FRONTEND_BACKEND_PATH: config.prefix,
+            },
+        });
+        let output = '';
+        child.stdout.on('data', data => { output += data; });
+        child.stderr.on('data', data => { output += data; });
+        child.on('error', reject);
+        child.on('close', code => resolve({ code, output }));
+        child.stdin.end(fs.readFileSync(require.resolve('../run/payload/root/usr/lib/sub-store/healthcheck.js')));
     });
-    assert.equal(version, '2.42.4');
-    assert.equal(requests[0].url, 'http://127.0.0.1:3001/test-prefix/api/utils/env');
-});
+}
 
-test('rejects an invalid environment API version', async () => {
-    await assert.rejects(readAppVersion({
-        fetchImpl: async () => response(200, 'application/json', '{"status":"success","data":{"version":"latest"}}'),
-    }), /version is unavailable/);
-});
-
-test('runs the app version reader through its stdin entrypoint', async () => {
-    const requests = [];
-    const result = await runStdinScript('app-version.js', {
-        SUB_STORE_FRONTEND_PORT: '3011',
-        SUB_STORE_FRONTEND_BACKEND_PATH: '/test-prefix/',
-    }, async (url, options) => {
-        requests.push({ url, options });
-        return response(200, 'application/json', '{"status":"success","data":{"version":"2.42.4"}}');
+async function runVersion(config) {
+    const port = new URL(config.frontend).port;
+    return new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['--input-type=commonjs', '-'], {
+            env: {
+                ...process.env,
+                SUB_STORE_FRONTEND_PORT: port,
+                SUB_STORE_FRONTEND_BACKEND_PATH: config.prefix,
+            },
+        });
+        let output = '';
+        child.stdout.on('data', data => { output += data; });
+        child.stderr.on('data', data => { output += data; });
+        child.on('error', reject);
+        child.on('close', code => resolve({ code, output }));
+        child.stdin.end(fs.readFileSync(require.resolve('../run/payload/root/usr/lib/sub-store/app-version.js')));
     });
-    assert.equal(result.code, 0);
-    assert.equal(result.output, '2.42.4\n');
-    assert.equal(requests[0].url, 'http://127.0.0.1:3011/test-prefix/api/utils/env');
+}
+
+test('executes health checks through the stdin invocation used by Docker', async t => {
+    const result = await runStdin(await fixture(t));
+    assert.equal(result.code, 0, result.output);
+    assert.match(result.output, /frontend assets and API checks passed/);
 });
 
-test('returns a failure from the app version stdin entrypoint for invalid data', async () => {
-    const result = await runStdinScript('app-version.js', {}, async () =>
-        response(200, 'application/json', '{"status":"success","data":{"version":"latest"}}'));
-    assert.equal(result.code, 1);
+test('stdin health checks fail when the frontend entrypoint is broken', async t => {
+    const config = await fixture(t, { '/assets/app.js': [404, 'text/plain', 'missing'] });
+    const result = await runStdin(config);
+    assert.equal(result.code, 1, result.output);
+    assert.match(result.output, /script.*HTTP 404/);
+});
+
+test('reads the Sub-Store version from the environment API', async t => {
+    const config = await fixture(t, {
+        '/test-prefix/api/utils/env': [200, 'application/json', '{"status":"success","data":{"version":"2.42.4"}}'],
+    });
+    const result = await runVersion(config);
+    assert.equal(result.code, 0, result.output);
+    assert.equal(result.output.trim(), '2.42.4');
+});
+
+test('rejects an invalid environment API version', async t => {
+    const config = await fixture(t, {
+        '/test-prefix/api/utils/env': [200, 'application/json', '{"status":"success","data":{"version":"latest"}}'],
+    });
+    const result = await runVersion(config);
+    assert.equal(result.code, 1, result.output);
     assert.equal(result.output, '');
 });

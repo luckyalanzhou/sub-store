@@ -1,8 +1,8 @@
 const assetPattern = /<(script|link)\b[^>]*\b(?:src|href)\s*=\s*["']([^"']+)["'][^>]*>/gi;
 
-async function check({ frontend, backend, prefix, rawPrefix = prefix, assetsOnly = false, fetchImpl = globalThis.fetch, report = console.log }) {
+async function check({ frontend, backend, prefix, rawPrefix = prefix, assetsOnly = false, report = console.log }) {
     const request = async (url, label) => {
-        const response = await fetchImpl(url, { signal: AbortSignal.timeout(5000), redirect: 'error' });
+        const response = await fetch(url, { signal: AbortSignal.timeout(5000), redirect: 'error' });
         report(`${label}: HTTP ${response.status}, ${response.headers.get('content-type') || 'no content type'}`);
         if (!response.ok) throw new Error(`${label} failed with HTTP ${response.status}`);
         return response;

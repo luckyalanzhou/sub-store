@@ -1,0 +1,66 @@
+#!/usr/bin/lua
+local sys = require "luci.sys"
+local json = require "luci.jsonc"
+local function read(path)
+    local f = io.open(path, "r")
+    if not f then return "" end
+    local value = f:read("*a") or ""
+    f:close()
+    return value:gsub("%s+$", "")
+end
+local function operation_snapshot()
+    local f = io.open("/tmp/sub-store-operation/snapshot", "r")
+    if not f then return nil end
+    local version = f:read("*l")
+    local id = f:read("*l")
+    local action = f:read("*l")
+    local phase = f:read("*l")
+    local operation = f:read("*l") or ""
+    f:close()
+    if version ~= "sub-store-operation-v1" or not id or id == "" or
+        not action or action == "" or not phase or phase == "" then
+        return nil
+    end
+    return { id = id, action = action, phase = phase, operation = operation }
+end
+local function command(value)
+    return (sys.exec("( " .. value .. " ) 2>/dev/null") or ""):gsub("%s+$", "")
+end
+local state = "/tmp/sub-store-operation/"
+local plugin_update = "/tmp/sub-store-plugin-update/"
+local mode = arg[1] or "summary"
+local busy = sys.call("[ -d /tmp/sub-store-operation/lock ] && grep -Eq '^[1-9][0-9]*$' /tmp/sub-store-operation/lock/pid 2>/dev/null && kill -0 \"$(cat /tmp/sub-store-operation/lock/pid 2>/dev/null)\" 2>/dev/null") == 0
+local operation = operation_snapshot()
+local result = {
+    container = busy and "maintenance" or command("/usr/bin/sub-storectl status"),
+    version = read("/etc/sub-store/version"),
+    operation_id = operation and operation.id or "",
+    phase = operation and operation.phase or read(state .. "phase"),
+    action = operation and operation.action or read(state .. "action"),
+    operation = operation and operation.operation or read(state .. "status"),
+    busy = busy
+}
+-- Docker CLI calls can stall while dockerd pulls or replaces an image. Keep
+-- polling cheap during maintenance; the next poll reads full details again.
+if not busy and result.container == "running" then
+    result.health = command("/usr/bin/sub-storectl health")
+end
+if mode == "logs" or mode == "maintenance-log" or mode == "details" then
+    result.output = command("tail -n 100 /tmp/sub-store-operation/output.log")
+end
+if mode == "logs" or mode == "runtime-log" or mode == "details" then
+    if not busy then
+        result.container_log = command("docker logs --tail 100 sub-store 2>&1")
+    end
+end
+if mode == "details" and not busy then
+    result.url = command("/usr/bin/sub-storectl url")
+    result.api_url = command("/usr/bin/sub-storectl api-url")
+    result.storage = command("/usr/bin/sub-storectl storage")
+    result.image = command("docker inspect -f '{{.Config.Image}} / {{.Image}}' sub-store")
+    result.created = command("docker inspect -f '{{.Created}}' sub-store")
+    result.app_version = command("/usr/bin/sub-storectl app-version")
+    result.plugin_latest_version = read(plugin_update .. "latest-version")
+    result.plugin_update_available = read(plugin_update .. "update-available") == "1"
+end
+io.write(json.stringify(result), "\n")

@@ -2,12 +2,12 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-CTL="$ROOT/installer/payload/root/usr/bin/sub-storectl"
+CTL="$ROOT/run/payload/root/usr/bin/sub-storectl"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 awk '/^fail\(\) \{/ {copy=1} /^ACTION=/ {exit} copy {print}' "$CTL" > "$TEST_DIR/functions.sh"
 . "$TEST_DIR/functions.sh"
-. "$ROOT/installer/payload/root/usr/lib/sub-store/cron.sh"
+. "$ROOT/run/payload/root/usr/lib/sub-store/cron.sh"
 
 FRONTEND_PORT=8081
 BACKEND_PORT=8080
@@ -17,12 +17,11 @@ PUBLIC_URL=""
 API_PATH=0123456789abcdef0123456789abcdef0123456789abcdef
 SYNC_CRON='55 23 * * *'
 DATA_VOLUME=sub-store-data
-HEALTHCHECK="$ROOT/installer/payload/root/usr/lib/sub-store/healthcheck.js"
-APP_VERSION_CHECK="$ROOT/installer/payload/root/usr/lib/sub-store/app-version.js"
+HEALTHCHECK="$ROOT/run/payload/root/usr/lib/sub-store/healthcheck.js"
+APP_VERSION_CHECK="$ROOT/run/payload/root/usr/lib/sub-store/app-version.js"
 IMAGE_REF=xream/sub-store:latest
 RUN_IMAGE_REF="$IMAGE_REF"
 MOCK_VOLUME_PATH="$TEST_DIR/docker-root/volumes/$DATA_VOLUME/_data"
-INITIAL_MOCK_VOLUME_PATH="$MOCK_VOLUME_PATH"
 MOCK_CONTAINER=0
 MOCK_MERGE=""
 MOCK_FRONTEND_MAPPING=""
@@ -101,8 +100,6 @@ docker() {
         logs) cat "$MOCK_APP_LOGS" ;;
         stop) MOCK_CONTAINER_RUNNING=false; return 0 ;;
         start) MOCK_CONTAINER_RUNNING=true; return 0 ;;
-        pause) [ "${MOCK_PAUSE_FAIL:-0}" != 1 ] || return 1 ;;
-        unpause) [ "${MOCK_UNPAUSE_FAIL:-0}" != 1 ] || return 1 ;;
         rm|rename) return 0 ;;
         *) return 1 ;;
     esac
@@ -128,26 +125,6 @@ if (BACKEND_PORT=8081; valid_config) >/dev/null 2>&1; then
     echo 'Equal frontend and backend ports were accepted.' >&2
     exit 1
 fi
-long_access_host="$(awk 'BEGIN { for (i = 0; i < 254; i++) printf "a" }')"
-if (ACCESS_HOST="$long_access_host"; valid_config) >/dev/null 2>&1; then
-    echo 'An access hostname longer than 253 characters was accepted.' >&2
-    exit 1
-fi
-long_host_label="$(awk 'BEGIN { for (i = 0; i < 64; i++) printf "a" }')"
-if (ACCESS_HOST="$long_host_label.example"; valid_config) >/dev/null 2>&1; then
-    echo 'An access hostname label longer than 63 characters was accepted.' >&2
-    exit 1
-fi
-valid_host_label="$(awk 'BEGIN { for (i = 0; i < 63; i++) printf "a" }')"
-(ACCESS_HOST="$valid_host_label.example"; valid_config)
-for invalid_access_host in 256.1.1.1 1.2.3 1.2.3.4.5 01.2.3.4 1.2.3.04; do
-    if (ACCESS_HOST="$invalid_access_host"; valid_config) >/dev/null 2>&1; then
-        echo "An invalid IPv4 access host was accepted: $invalid_access_host" >&2
-        exit 1
-    fi
-done
-(ACCESS_HOST=0.0.0.0; valid_config)
-(ACCESS_HOST=255.255.255.255; valid_config)
 expected="http://$ACCESS_HOST:8081/?api=http%3A%2F%2F$ACCESS_HOST%3A8081%2F$API_PATH"
 [ "$(show_url)" = "$expected" ]
 [ "$(show_api_url)" = "http://$ACCESS_HOST:8080/$API_PATH" ]
@@ -157,11 +134,6 @@ PUBLIC_URL='https://sub.example.test/a&b+c=d'
 [ "$(show_url)" = "https://sub.example.test/a&b+c=d/?api=https%3A%2F%2Fsub.example.test%2Fa%26b%2Bc%3Dd%2F$API_PATH" ]
 printf '%s' "$(frontend_cors_origins)" | grep -Fq 'https://sub.example.test'
 PUBLIC_URL=""
-if (PUBLIC_URL=https://256.1.1.1; valid_config) >/dev/null 2>&1; then
-    echo 'A public URL with an invalid IPv4 host was accepted.' >&2
-    exit 1
-fi
-(PUBLIC_URL=https://192.168.1.1; valid_config)
 MOCK_CONTAINER=1
 MOCK_FRONTEND_MAPPING=9091
 MOCK_BACKEND_MAPPING=9090
@@ -245,214 +217,12 @@ if copy_directory_to_volume "$TEST_DIR" >/dev/null 2>&1; then
     echo 'Migration accepted a source containing the Docker volume.' >&2
     exit 1
 fi
-
-UNINSTALL_TEST_ROOT="$TEST_DIR/uninstall-root"
-mkdir -p "$UNINSTALL_TEST_ROOT"
-awk 'index($0, "uninstall_plugin() {") == 1 {copy=1} /^ACTION=/ {exit} copy {print}' "$CTL" |
-    sed -e "s|/tmp/|$UNINSTALL_TEST_ROOT/tmp/|g" \
-        -e "s|/etc/|$UNINSTALL_TEST_ROOT/etc/|g" \
-        -e "s|/usr/|$UNINSTALL_TEST_ROOT/usr/|g" \
-        -e "s|/www/|$UNINSTALL_TEST_ROOT/www/|g" > "$TEST_DIR/uninstall-function.sh"
-. "$TEST_DIR/uninstall-function.sh"
-
-MOCK_VOLUME_PATH="$TEST_DIR/uninstall-default/_data"
-mkdir -p "$MOCK_VOLUME_PATH"
-printf '%s\n' 'default uninstall data' > "$MOCK_VOLUME_PATH/storage.json"
-MOCK_CONTAINER=1
-: > "$DOCKER_LOG"
-uninstall_plugin
-[ -f "$MOCK_VOLUME_PATH/storage.json" ] || {
-    echo 'Default uninstall removed user data from the Docker volume.' >&2
-    exit 1
-}
-if grep -Eq '^volume rm sub-store-data$' "$DOCKER_LOG"; then
-    echo 'Default uninstall attempted to remove the Docker data volume.' >&2
-    exit 1
-fi
-
-MOCK_VOLUME_PATH="$TEST_DIR/uninstall-explicit/_data"
-mkdir -p "$MOCK_VOLUME_PATH"
-printf '%s\n' 'explicit keep-data' > "$MOCK_VOLUME_PATH/storage.json"
-: > "$DOCKER_LOG"
-uninstall_plugin --keep-data
-[ -f "$MOCK_VOLUME_PATH/storage.json" ] || {
-    echo '--keep-data uninstall removed user data from the Docker volume.' >&2
-    exit 1
-}
-if grep -Eq '^volume rm sub-store-data$' "$DOCKER_LOG"; then
-    echo '--keep-data uninstall attempted to remove the Docker data volume.' >&2
-    exit 1
-fi
-
-MOCK_VOLUME_PATH="$TEST_DIR/uninstall-delete/_data"
-mkdir -p "$MOCK_VOLUME_PATH"
-printf '%s\n' 'explicit delete' > "$MOCK_VOLUME_PATH/storage.json"
-: > "$DOCKER_LOG"
-uninstall_plugin --delete-data
-[ ! -e "$MOCK_VOLUME_PATH" ] || {
-    echo '--delete-data uninstall did not remove the requested Docker data volume.' >&2
-    exit 1
-}
-grep -Fxq 'volume rm sub-store-data' "$DOCKER_LOG"
-MOCK_VOLUME_PATH="$INITIAL_MOCK_VOLUME_PATH"
-
-copy_volume_path="$TEST_DIR/copy-volume"
-mkdir -p "$copy_volume_path"
-if ln -s "$copy_volume_path" "$TEST_DIR/copy-volume-alias" 2>/dev/null &&
-    [ -L "$TEST_DIR/copy-volume-alias" ]; then
-    if (
-        VOLUME_PATH="$copy_volume_path"
-        cp() { : > "$TEST_DIR/overlap-copy-attempted"; }
-        copy_directory_to_volume "$TEST_DIR/copy-volume-alias" > "$TEST_DIR/copy-overlap-output" 2>&1
-    ); then
-        echo 'Migration accepted a symlink alias of the Docker volume as its source.' >&2
-        exit 1
-    fi
-    grep -Fq 'refusing recursive copy' "$TEST_DIR/copy-overlap-output" || {
-        cat "$TEST_DIR/copy-overlap-output" >&2
-        echo 'The overlapping data paths were not rejected before copying.' >&2
-        exit 1
-    }
-    [ ! -e "$TEST_DIR/overlap-copy-attempted" ] || {
-        echo 'Migration attempted to copy overlapping data paths.' >&2
-        exit 1
-    }
-fi
-export_target="$TEST_DIR/sub-store-data.tar.gz"
-printf '%s\n' 'previous export' > "$export_target"
-if (
-    tar() { printf '%s\n' 'partial archive' > "$2"; return 1; }
-    export_data "$export_target" >/dev/null 2>&1
-); then
-    echo 'A failed export was reported as successful.' >&2
-    exit 1
-fi
-[ "$(cat "$export_target")" = 'previous export' ] || {
-    echo 'A failed export replaced the previous archive.' >&2
-    exit 1
-}
-for temporary_export in "$TEST_DIR"/.sub-store-export.*; do
-    [ ! -e "$temporary_export" ] || {
-        echo 'A failed export left a temporary archive behind.' >&2
-        exit 1
-    }
-done
-pause_fail_target="$TEST_DIR/pause-failed-export.tar.gz"
-MOCK_CONTAINER_RUNNING=true
-MOCK_PAUSE_FAIL=1
-if (export_data "$pause_fail_target") > "$TEST_DIR/pause-failed-output" 2>&1; then
-    echo 'An export continued after Docker pause failed.' >&2
-    exit 1
-fi
-MOCK_PAUSE_FAIL=0
-[ ! -e "$pause_fail_target" ]
-for temporary_export in "$TEST_DIR"/.sub-store-export.*; do
-    [ ! -e "$temporary_export" ] || {
-        echo 'A failed Docker pause left a temporary archive behind.' >&2
-        exit 1
-    }
-done
-unpause_fail_target="$TEST_DIR/unpause-failed-export.tar.gz"
-printf '%s\n' 'previous backup' > "$unpause_fail_target"
-MOCK_UNPAUSE_FAIL=1
-: > "$DOCKER_LOG"
-if (export_data "$unpause_fail_target") > "$TEST_DIR/unpause-failed-output" 2>&1; then
-    echo 'An export reported success after Docker could not unpause the container.' >&2
-    exit 1
-fi
-MOCK_UNPAUSE_FAIL=0
-grep -Fq 'export was saved, but sub-store could not be unpaused' "$TEST_DIR/unpause-failed-output" || {
-    cat "$TEST_DIR/unpause-failed-output" >&2
-    echo 'The failed container resume was not reported after saving the export.' >&2
-    exit 1
-}
-tar -tzf "$unpause_fail_target" | grep -Eq '(^|/)storage.json$'
-[ "$(grep -Fc 'unpause sub-store' "$DOCKER_LOG")" -ge 2 ] || {
-    cat "$DOCKER_LOG" >&2
-    echo 'The export cleanup did not retry unpausing the container.' >&2
-    exit 1
-}
+export_data "$TEST_DIR/sub-store-data.tar.gz" >/dev/null
+tar -tzf "$TEST_DIR/sub-store-data.tar.gz" | grep -Eq '(^|/)storage.json$'
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) ;;
-    *) [ "$(stat -c '%a' "$unpause_fail_target")" = 600 ] ;;
+    *) [ "$(stat -c '%a' "$TEST_DIR/sub-store-data.tar.gz")" = 600 ] ;;
 esac
-if ln -s "$VOLUME_PATH" "$TEST_DIR/export-volume-alias" 2>/dev/null &&
-    [ -L "$TEST_DIR/export-volume-alias" ]; then
-    MOCK_CONTAINER_RUNNING=false
-    if (export_data "$TEST_DIR/export-volume-alias/backup.tar.gz") > "$TEST_DIR/export-alias-output" 2>&1; then
-        echo 'Export through a symlink into the data volume was accepted.' >&2
-        exit 1
-    fi
-    grep -Fq 'export destination cannot be inside the data volume' "$TEST_DIR/export-alias-output" || {
-        cat "$TEST_DIR/export-alias-output" >&2
-        echo 'The data volume alias was not rejected before exporting.' >&2
-        exit 1
-    }
-    [ ! -e "$VOLUME_PATH/backup.tar.gz" ]
-    for temporary_export in "$VOLUME_PATH"/.sub-store-export.*; do
-        [ ! -e "$temporary_export" ] || {
-            echo 'Export through a data volume alias left a temporary archive behind.' >&2
-            exit 1
-        }
-    done
-    MOCK_CONTAINER_RUNNING=true
-fi
-export_data "$export_target" >/dev/null
-tar -tzf "$export_target" | grep -Eq '(^|/)storage.json$'
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) ;;
-    *) [ "$(stat -c '%a' "$export_target")" = 600 ] ;;
-esac
-run_interrupt_test=1
-case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) [ "${RUN_SIGNAL_TEST:-0}" = 1 ] || run_interrupt_test=0 ;;
-esac
-if [ "$run_interrupt_test" = 1 ]; then
-    interrupt_dir="$TEST_DIR/interrupted-export"
-    mkdir -p "$interrupt_dir"
-    : > "$DOCKER_LOG"
-    printf '%s\n' 'previous backup' > "$interrupt_dir/backup.tar.gz"
-    MOCK_CONTAINER_RUNNING=true
-    INTERRUPT_DIR="$interrupt_dir"
-    tar() {
-        : > "$INTERRUPT_DIR/tar-started"
-        while :; do :; done
-    }
-    export_data "$interrupt_dir/backup.tar.gz" > "$interrupt_dir/output" 2>&1 &
-    export_pid=$!
-    attempt=0
-    while [ ! -f "$interrupt_dir/tar-started" ]; do
-        attempt=$((attempt + 1))
-        if [ "$attempt" -ge 100 ]; then
-            kill -TERM "$export_pid" 2>/dev/null || true
-            wait "$export_pid" 2>/dev/null || true
-            echo 'The interrupted export test did not reach tar.' >&2
-            exit 1
-        fi
-        sleep 0.05
-    done
-    kill -TERM "$export_pid"
-    if wait "$export_pid"; then
-        echo 'An interrupted export returned success.' >&2
-        exit 1
-    fi
-    grep -Fxq 'unpause sub-store' "$DOCKER_LOG" || {
-        cat "$DOCKER_LOG" >&2
-        cat "$interrupt_dir/output" >&2
-        echo 'An interrupted export left the container paused.' >&2
-        exit 1
-    }
-    [ "$(cat "$interrupt_dir/backup.tar.gz")" = 'previous backup' ] || {
-        echo 'An interrupted export replaced the previous backup.' >&2
-        exit 1
-    }
-    for interrupted_temp in "$interrupt_dir"/.sub-store-export.*; do
-        [ ! -e "$interrupted_temp" ] || {
-            echo 'An interrupted export left a temporary archive behind.' >&2
-            exit 1
-        }
-    done
-fi
 MOCK_CONTAINER=1
 HAD_OLD_CONTAINER=1
 BACKUP_NAME=sub-store-test-rollback

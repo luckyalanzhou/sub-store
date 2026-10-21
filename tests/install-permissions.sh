@@ -9,11 +9,11 @@ case "$(uname -s)" in
 esac
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-. "$ROOT/installer/payload/root/usr/lib/sub-store/permissions.sh"
+. "$ROOT/run/payload/root/usr/lib/sub-store/permissions.sh"
 for mask in 022 077; do
     dest="$TMP/$mask"
     mkdir -p "$dest"
-    (umask "$mask"; cp -R "$ROOT/installer/payload/root/." "$dest/")
+    (umask "$mask"; cp -R "$ROOT/run/payload/root/." "$dest/")
     mkdir -p "$dest/etc/config"
     printf 'private\n' > "$dest/etc/config/sub-store"
     chmod 600 "$dest/etc/config/sub-store"

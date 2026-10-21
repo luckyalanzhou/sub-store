@@ -35,14 +35,6 @@ function compareVersions(left, right) {
     }
     return 0;
 }
-function validHostnameOrIPv4(host) {
-    if (!host || host.length > 253 || !/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) ||
-        /\.\.|-\.|\.-/.test(host)) return false;
-    const labels = host.split('.');
-    if (/^[0-9.]+$/.test(host))
-        return labels.length === 4 && labels.every(label => /^(0|[1-9][0-9]{0,2})$/.test(label) && +label <= 255);
-    return labels.every(label => label.length <= 63);
-}
 return view.extend({
     validCron: validCron,
     compareVersions: compareVersions,
@@ -243,10 +235,12 @@ return view.extend({
         } catch (error) {}
     },
     selectLogTab: function(index) {
-        const pane = this.logPanes && this.logPanes[index];
-        const menu = pane && pane.parentNode && pane.parentNode.previousElementSibling;
-        const tab = menu && menu.querySelector('[data-tab="' + pane.getAttribute('data-tab') + '"] a');
-        if (tab) tab.click();
+        this.logPanes.forEach((node, paneIndex) => {
+            node.hidden = paneIndex !== index;
+            const tab = this.logTabItems[paneIndex];
+            tab.className = paneIndex === index ? 'cbi-tab' : 'cbi-tab-disabled';
+            tab.children[0].setAttribute('aria-selected', paneIndex === index ? 'true' : 'false');
+        });
     },
     showMaintenanceLogs: function() {
         if (this.logsPageTab) this.logsPageTab.click();
@@ -344,6 +338,7 @@ return view.extend({
         try {
             await this.run('restart');
             await this.enqueueTask;
+            await ui.changes.apply();
         }
         catch (error) { this.reloadAfterTask = false; throw error; }
     },
@@ -395,7 +390,8 @@ return view.extend({
         const frontend = o;
         o = s.taboption('basic', form.Value, 'access_host', '访问主机名');
         o.validate = function(section, value) {
-            return !value || validHostnameOrIPv4(value) || '请输入域名或 IPv4，不含协议和端口。';
+            return !value || (value.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(value) &&
+                !/\.\.|-\.|\.-/.test(value)) || '请输入域名或 IPv4，不含协议和端口。';
         };
         o = s.taboption('basic', form.Value, 'public_url', '公开访问地址');
         o.validate = function(section, value) {
@@ -404,7 +400,7 @@ return view.extend({
                 return '请输入不含查询参数的 HTTP 或 HTTPS 地址。';
             const authority = value.replace(/^https?:\/\//, '').split('/')[0];
             const host = authority.split(':')[0];
-            if (!validHostnameOrIPv4(host))
+            if (!host || host.length > 253 || !/^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(host) || /\.\.|-\.|\.-/.test(host))
                 return '公开访问地址中的主机名无效。';
             const port = authority.includes(':') ? +authority.split(':').pop() : 0;
             return !port || (port >= 1 && port <= 65535) || '端口必须在 1 到 65535 之间。';
@@ -448,15 +444,31 @@ return view.extend({
             this.buttons.push(clearButton);
             return E('div', {}, [clearButton, box]);
         };
-        const runtimeLogs = E('div', { 'data-tab': 'runtime', 'data-tab-title': '运行日志', 'data-tab-active': 'true' }, [
-            logSection('container', '运行日志', 'clear-runtime-logs')
-        ]);
-        const maintenanceLogs = E('div', { 'data-tab': 'maintenance', 'data-tab-title': '维护日志' }, [
-            logSection('operation', '维护日志', 'clear-maintenance-logs')
-        ]);
+        const runtimeLogs = logSection('container', '运行日志', 'clear-runtime-logs');
+        const maintenanceLogs = logSection('operation', '维护日志', 'clear-maintenance-logs');
         this.logPanes = [runtimeLogs, maintenanceLogs];
+        this.logTabItems = [];
+        const logTabMenu = E('ul', { 'class': 'cbi-tabmenu', role: 'tablist',
+            style: 'display:flex;flex-wrap:wrap;width:100%;margin:0;padding:0' }, [
+            ...['运行日志', '维护日志'].map((label, index) => {
+                const pane = this.logPanes[index];
+                if (index) pane.hidden = true;
+                const item = E('li', { 'class': index ? 'cbi-tab-disabled' : 'cbi-tab',
+                    style: 'display:inline-flex;flex:0 0 auto;width:auto' }, [
+                    E('a', { href: '#', role: 'tab', 'aria-selected': index ? 'false' : 'true',
+                        style: 'display:inline-flex;width:auto;white-space:nowrap',
+                        click: ev => {
+                            ev.preventDefault();
+                            this.selectLogTab(index);
+                        } }, [label])
+                ]);
+                this.logTabItems.push(item);
+                return item;
+            })
+        ]);
+        this.logTabMenu = logTabMenu;
         const logsPanel = E('div', {}, this.logPanes);
-        display('logs', '_logs', null, logsPanel);
+        display('logs', '_logs', '', logsPanel);
         const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
             click: ui.createHandlerFn(this, function() {
                 return this.confirm('rotate-key', '重新生成 API 访问密钥', '成功后旧管理地址会立即失效。未保存的表单修改将丢弃，请先保存需要保留的设置。');
@@ -470,9 +482,10 @@ return view.extend({
         ]));
         display('maintenance', '_rotate', 'API 密钥', rotate);
         const formNode = await m.render();
-        ui.tabs.initTabGroup(this.logPanes);
         const pageTabs = formNode.querySelectorAll && formNode.querySelectorAll('.cbi-tabmenu a');
         this.logsPageTab = pageTabs && Array.from(pageTabs).find(tab => tab.textContent.trim() === '日志');
+        const logTitle = formNode.querySelector && formNode.querySelector('#cbi-sub-store-main-_logs .cbi-value-title');
+        if (logTitle) logTitle.replaceWith(E('div', { 'class': 'cbi-value-title' }, [logTabMenu]));
         this.paint();
         this.pollCycle = 0;
         poll.add(async () => {

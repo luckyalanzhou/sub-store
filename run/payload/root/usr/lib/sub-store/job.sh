@@ -18,35 +18,11 @@ if [ "$MODE" = "--enqueue" ] && ! command -v nohup >/dev/null 2>&1; then
     exit 1
 fi
 STATE=/tmp/sub-store-operation
-if [ -L "$STATE" ]; then
-    echo "Operation state directory is not trusted." >&2
-    exit 1
-fi
 mkdir -p "$STATE"
-if [ -L "$STATE" ] || [ ! -d "$STATE" ]; then
-    echo "Operation state directory is not trusted." >&2
-    exit 1
-fi
-state_uid="$(stat -c '%u' "$STATE" 2>/dev/null)" || {
-    echo "Cannot verify operation state directory ownership." >&2
-    exit 1
-}
-current_uid="$(id -u)" || {
-    echo "Cannot verify operation state directory ownership." >&2
-    exit 1
-}
-if [ "$state_uid" != "$current_uid" ]; then
-    echo "Operation state directory is not trusted." >&2
-    exit 1
-fi
-chmod 700 "$STATE" || {
-    echo "Cannot secure operation state directory." >&2
-    exit 1
-}
 write_operation_state() {
     phase="$1"
     message="$2"
-    snapshot_tmp="$(mktemp "$STATE/snapshot.XXXXXX")" || return 1
+    snapshot_tmp="$STATE/snapshot.$$"
     {
         printf '%s\n' sub-store-operation-v1
         printf '%s\n' "$OPERATION_ID"
@@ -59,10 +35,6 @@ write_operation_state() {
     printf '%s\n' "$message" > "$STATE/status"
     mv -f "$snapshot_tmp" "$STATE/snapshot"
 }
-if [ -L "$STATE/lock" ] || [ -L "$STATE/lock/pid" ]; then
-    echo "Operation lock is not trusted." >&2
-    exit 1
-fi
 if [ "$MODE" = "--worker" ]; then
     [ -d "$STATE/lock" ] || { echo "No queued operation." >&2; exit 1; }
     [ "$(cat "$STATE/action" 2>/dev/null)" = "$ACTION" ] || {
@@ -97,8 +69,6 @@ else
     fi
     printf '%s\n' "$$" > "$STATE/lock/pid"
     trap 'rm -f "$STATE/lock/pid"; rmdir "$STATE/lock" 2>/dev/null || true' EXIT
-    rm -f "$STATE/action" "$STATE/phase" "$STATE/status" "$STATE/snapshot" \
-        "$STATE"/snapshot.* "$STATE/output.log" "$STATE/output.pipe" "$STATE"/output.chunk.*
     OPERATION_ID="$(date '+%s')-$$"
     : > "$STATE/output.log"
     write_operation_state running "正在执行：$ACTION；开始时间：$(date '+%Y-%m-%d %H:%M:%S')"
@@ -110,26 +80,26 @@ run_job() {
     COMMAND=/usr/bin/sub-storectl
     set -- "$ACTION"
     trim_operation_log() {
-        if [ "$log_size" -gt 1048576 ]; then
+        log_size="$(wc -c < "$STATE/output.log" | tr -d '[:space:]')"
+        if [ -n "$log_size" ] && [ "$log_size" -gt 1048576 ]; then
             trimmed_log="$(mktemp "$STATE/output.log.XXXXXX")"
             tail -c 1048576 "$STATE/output.log" > "$trimmed_log"
             mv "$trimmed_log" "$STATE/output.log"
-            log_size=1048576
         fi
     }
 
     consume_operation_output() {
-        log_size=0
+        chunk="$STATE/output.chunk.$$"
         exec 3< "$STATE/output.pipe"
         while :; do
-            previous_size="$log_size"
-            dd of="$STATE/output.log" bs=65536 count=1 \
-                oflag=append conv=notrunc <&3 2>/dev/null || break
-            log_size="$(stat -c '%s' "$STATE/output.log" 2>/dev/null)" || break
-            [ -n "$log_size" ] && [ "$log_size" -gt "$previous_size" ] || break
+            dd of="$chunk" bs=16384 count=1 <&3 2>/dev/null || break
+            chunk_size="$(wc -c < "$chunk" | tr -d '[:space:]')"
+            [ -n "$chunk_size" ] && [ "$chunk_size" -gt 0 ] || break
+            cat "$chunk" >> "$STATE/output.log" || break
             trim_operation_log || true
         done
         exec 3<&-
+        rm -f "$chunk"
     }
 
     if ! mkfifo "$STATE/output.pipe" 2>/dev/null; then
@@ -146,6 +116,7 @@ run_job() {
     fi
     wait "$log_pid" || true
     rm -f "$STATE/output.pipe"
+    trim_operation_log || true
     if [ "$result" -eq 0 ]; then
         write_operation_state success "操作成功：$ACTION；完成时间：$(date '+%Y-%m-%d %H:%M:%S')"
     else

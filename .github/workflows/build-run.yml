@@ -57,7 +57,7 @@ jobs:
             xream/sub-store:latest
           for attempt in $(seq 1 60); do
             if docker exec -i sub-store-smoke node --input-type=commonjs - \
-              < installer/payload/root/usr/lib/sub-store/healthcheck.js; then
+              < run/payload/root/usr/lib/sub-store/healthcheck.js; then
               docker inspect -f 'image={{.Image}} created={{.Created}}' sub-store-smoke
               exit 0
             fi
@@ -104,6 +104,9 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare-release.outputs.source_sha }}
 
+      - name: Test release version and package validation rules
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
       - name: Generate numbered release notes
         shell: bash
         run: |
@@ -111,7 +114,7 @@ jobs:
           mkdir -p dist
           {
             printf '# sub-store v%s\n\n' "$VERSION"
-            printf '安装器目标版本：iStoreOS 24.10（opkg）和 25.12（apk）。提供 `.run` 自解压安装器和 SHA-256 校验文件；首次启动需要联网拉取官方镜像。\n\n'
+            printf '安装包：iStoreOS 24.10 `.run` 自解压安装器，附 SHA-256 校验文件。首次启动需要联网拉取官方镜像。\n\n'
             printf '## 优化内容\n\n'
             index=0
             if [[ -n "$PREVIOUS_TAG" ]]; then
@@ -148,13 +151,92 @@ jobs:
           PREVIOUS_TAG: ${{ needs.prepare-release.outputs.previous_tag }}
           RUN_IDS: ${{ needs.prepare-release.outputs.run_ids }}
 
-      - name: Install packaging and validation tools
+      - name: Check shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            scripts/build-run.sh \
+            run/payload/install.sh \
+            run/payload/root/etc/init.d/sub-store \
+            run/payload/root/usr/bin/sub-storectl \
+            run/payload/root/usr/lib/sub-store/cron.sh \
+            run/payload/root/usr/lib/sub-store/job.sh \
+            run/payload/root/usr/lib/sub-store/plugin-update \
+            run/payload/root/usr/lib/sub-store/permissions.sh \
+            tests/install-permissions.sh \
+            tests/plugin-install-rollback.sh \
+            tests/operation-feedback.sh \
+            tests/cron-validation.sh \
+            tests/docker-volume-storage.sh \
+            tests/image-update.sh \
+            tests/plugin-update.sh; do
+            sh -n "$script"
+          done
+
+      - name: Install packaging and Lua tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends makeself lua5.1 busybox-static zstd
 
-      - name: Run shared validation suite
-        run: bash scripts/validate.sh
+      - name: Check OpenWrt BusyBox shell syntax and API-key generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            scripts/build-run.sh \
+            run/payload/install.sh \
+            run/payload/root/etc/init.d/sub-store \
+            run/payload/root/usr/bin/sub-storectl \
+            run/payload/root/usr/lib/sub-store/cron.sh \
+            run/payload/root/usr/lib/sub-store/job.sh \
+            run/payload/root/usr/lib/sub-store/plugin-update \
+            run/payload/root/usr/lib/sub-store/permissions.sh \
+            tests/install-permissions.sh \
+            tests/plugin-install-rollback.sh \
+            tests/operation-feedback.sh \
+            tests/cron-validation.sh \
+            tests/docker-volume-storage.sh \
+            tests/image-update.sh \
+            tests/plugin-update.sh; do
+            if grep -q $'\r' "$script"; then
+              echo "CRLF line endings are not allowed in shell script: $script" >&2
+              exit 1
+            fi
+            busybox ash -n "$script"
+          done
+          grep -Fxq 'set -e' run/payload/root/usr/bin/sub-storectl
+          for attempt in $(seq 1 20); do
+            key="$(busybox ash -c "dd if=/dev/urandom bs=2048 count=1 2>/dev/null | LC_ALL=C tr -dc '0123456789abcdef' | cut -c1-48")"
+            [[ "$key" =~ ^[0-9a-f]{48}$ ]]
+          done
+          awk_bin="$(mktemp -d)"
+          trap 'rm -rf "$awk_bin"' EXIT
+          cat > "$awk_bin/awk" <<'EOF'
+          #!/bin/sh
+          exec busybox awk "$@"
+          EOF
+          chmod +x "$awk_bin/awk"
+          PATH="$awk_bin:$PATH" busybox ash tests/cron-validation.sh
+          busybox ash tests/docker-volume-storage.sh
+          busybox ash tests/image-update.sh
+          BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
+          busybox ash tests/install-permissions.sh
+          busybox ash tests/plugin-install-rollback.sh
+          busybox ash tests/plugin-update.sh
+
+      - name: Check native LuCI view and status endpoint
+        run: |
+          luac5.1 -p run/payload/root/usr/lib/sub-store/status tests/luci-status.lua
+          lua5.1 tests/luci-status.lua .
+          node --check run/payload/root/www/luci-static/resources/view/sub-store/manage.js
+          node --test tests/luci-view.test.js
+
+      - name: Check frontend health script and regression cases
+        run: |
+          node --check run/payload/root/usr/lib/sub-store/healthcheck.js
+          node --check run/payload/root/usr/lib/sub-store/app-version.js
+          node --test tests/frontend-health.test.js
 
       - name: Build installer
         run: sh scripts/build-run.sh

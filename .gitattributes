@@ -5,12 +5,12 @@
 *.lua text eol=lf
 *.yml text eol=lf
 *.md text eol=lf
-installer/payload/root/etc/init.d/sub-store text eol=lf
-installer/payload/root/usr/bin/sub-storectl text eol=lf
+run/payload/root/etc/init.d/sub-store text eol=lf
+run/payload/root/usr/bin/sub-storectl text eol=lf
 
 *.js text eol=lf
 *.json text eol=lf
 *.py text eol=lf
 LICENSE text eol=lf
-installer/payload/root/usr/lib/sub-store/status text eol=lf
-installer/payload/root/usr/lib/sub-store/plugin-update text eol=lf
+run/payload/root/usr/lib/sub-store/status text eol=lf
+run/payload/root/usr/lib/sub-store/plugin-update text eol=lf

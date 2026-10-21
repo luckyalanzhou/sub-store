@@ -2,7 +2,7 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-PAYLOAD="$ROOT/installer/payload"
+PAYLOAD="$ROOT/run/payload"
 VERSION="${VERSION:-}"
 
 printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
