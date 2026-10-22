@@ -4,6 +4,9 @@ START=99
 STOP=10
 
 start() {
+	if [ -x /usr/lib/sub-store/install-recovery ]; then
+		/usr/lib/sub-store/install-recovery || return 1
+	fi
     /usr/bin/sub-storectl start
 }
 

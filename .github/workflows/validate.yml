@@ -35,15 +35,23 @@ jobs:
             scripts/build-run.sh \
             run/payload/install.sh \
             run/payload/lib/package-manager.sh \
+            run/payload/lib/install-lock.sh \
             run/payload/root/etc/init.d/sub-store \
+            run/payload/root/etc/init.d/sub-store-install-recovery \
             run/payload/root/usr/bin/sub-storectl \
+            run/payload/root/usr/lib/sub-store/install-recovery \
+            run/payload/root/usr/lib/sub-store/export-data \
+            run/payload/root/usr/lib/sub-store/registry-image.sh \
             run/payload/root/usr/lib/sub-store/cron.sh \
             run/payload/root/usr/lib/sub-store/job.sh \
             run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
+            tests/install-operation-lock.sh \
+            tests/install-recovery.sh \
             tests/install-log.sh \
             tests/export-data.sh \
+            tests/uninstall-cleanup.sh \
             tests/service-init.sh \
             tests/package-manager.sh \
             tests/plugin-install-rollback.sh \
@@ -77,6 +85,8 @@ jobs:
           BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
           echo 'Running BusyBox regression: install-permissions'
           busybox ash tests/install-permissions.sh
+          busybox ash tests/install-operation-lock.sh
+          busybox ash tests/install-recovery.sh
           echo 'Running BusyBox regression: install-log'
           busybox ash tests/install-log.sh
           echo 'Running BusyBox regression: export-data'
@@ -87,6 +97,7 @@ jobs:
           busybox ash tests/package-manager.sh
           echo 'Running BusyBox regression: plugin-install-rollback'
           busybox ash tests/plugin-install-rollback.sh
+          busybox ash tests/uninstall-cleanup.sh
           echo 'Running BusyBox regression: plugin-update'
           busybox ash tests/plugin-update.sh
 

@@ -52,6 +52,11 @@ class BuildRunTests(unittest.TestCase):
                 versioned_view.read_bytes(),
                 (payload / "root/www/luci-static/resources/view/sub-store/manage.js").read_bytes(),
             )
+            self.assertTrue((payload / "lib/install-lock.sh").is_file())
+            self.assertTrue((payload / "root/usr/lib/sub-store/export-data").is_file())
+            self.assertTrue((payload / "root/usr/lib/sub-store/registry-image.sh").is_file())
+            self.assertTrue((payload / "root/usr/lib/sub-store/install-recovery").is_file())
+            self.assertTrue((payload / "root/etc/init.d/sub-store-install-recovery").is_file())
 
 
 if __name__ == "__main__":

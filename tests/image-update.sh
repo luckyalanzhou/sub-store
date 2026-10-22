@@ -7,6 +7,7 @@ TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 awk '/^fail\(\) \{/ {copy=1} /^ACTION=/ {exit} copy {print}' "$CTL" > "$TEST_DIR/functions.sh"
 . "$TEST_DIR/functions.sh"
+. "$ROOT/run/payload/root/usr/lib/sub-store/registry-image.sh"
 . "$ROOT/run/payload/root/usr/lib/sub-store/cron.sh"
 render_config() { valid_config; }
 
@@ -23,6 +24,7 @@ APP_VERSION_CHECK="$ROOT/run/payload/root/usr/lib/sub-store/app-version.js"
 IMAGE_REF=xream/sub-store:latest
 RUN_IMAGE_REF="$IMAGE_REF"
 CONFIG="$TEST_DIR/sub-store.config"
+INSTALL_TRANSACTION_DIR="$TEST_DIR/install-transaction"
 touch "$CONFIG"
 VOLUME_PATH="$TEST_DIR/volume"
 mkdir -p "$VOLUME_PATH"
@@ -39,6 +41,10 @@ CONTAINER_STATE=running
 IMAGE_ARCH=amd64
 IMAGE_VARIANT=''
 sleep() { :; }
+commit_installer_metadata() {
+    printf 'metadata %s\n' "$1" >> "$TEST_DIR/docker.log"
+    [ "${INSTALL_METADATA_FAIL:-0}" != 1 ]
+}
 
 uci() {
     case "$*" in
@@ -73,6 +79,8 @@ docker() {
                             [ "$CLEANUP_CASE" != inspect-failed ] || return 1
                             [ "$CLEANUP_CASE" = dangling ] || echo "xream/sub-store@$OLD_IMAGE_ID"
                             [ "$CLEANUP_CASE" != tagged ] || echo user/keep:backup
+                            [ "$CLEANUP_CASE" != custom-tag ] || echo xream/sub-store:backup
+                            [ "$CLEANUP_CASE" != latest-tag ] || echo xream/sub-store:latest
                             ;;
                         *) cat "$TEST_DIR/latest" ;;
                     esac
@@ -126,7 +134,9 @@ docker() {
                     ;;
                 *State.Running*) [ "$CONTAINER_STATE" != running ] || echo true ;;
                 *State.Status*)
-                    if [ -f "$TEST_DIR/new" ] && [ "$NEW_HEALTHY" != 1 ]; then echo exited; else echo "$CONTAINER_STATE"; fi
+                    if [ -n "${INSTALL_STATUS_OVERRIDE:-}" ] && [ -f "$TEST_DIR/install-status-checked" ]; then echo "$INSTALL_STATUS_OVERRIDE"
+                    elif [ -f "$TEST_DIR/new" ] && [ "$NEW_HEALTHY" != 1 ]; then echo exited
+                    else echo "$CONTAINER_STATE"; fi
                     ;;
                 *Config.Env*)
                     cat <<EOF
@@ -156,7 +166,10 @@ EOF
             if [ "$2" = sub-store ]; then touch "$TEST_DIR/moved"; else rm -f "$TEST_DIR/moved"; fi
             ;;
         run) touch "$TEST_DIR/new"; echo new-container ;;
-        exec) [ "$NEW_HEALTHY" = 1 ] ;;
+        exec)
+            [ "$NEW_HEALTHY" = 1 ] || return 1
+            [ -z "${INSTALL_STATUS_OVERRIDE:-}" ] || touch "$TEST_DIR/install-status-checked"
+            ;;
         logs) echo broken-container ;;
         rm)
             case "$2" in
@@ -214,6 +227,83 @@ curl() {
     esac
 }
 
+# Run the real command dispatcher with the host fixtures above. Only the
+# OpenWrt config-loader and absolute library paths are adapted for this host.
+config_load() { :; }
+config_get() {
+    case "$1" in
+        FRONTEND_PORT) eval "$1=3001" ;;
+        BACKEND_PORT) eval "$1=3000" ;;
+        ACCESS_HOST|PUBLIC_URL) eval "$1=''" ;;
+        API_PATH) eval "$1=0123456789abcdef0123456789abcdef0123456789abcdef" ;;
+        SYNC_CRON) eval "$1='55 23 * * *'" ;;
+        IMAGE_REF) eval "$1=xream/sub-store:latest" ;;
+    esac
+}
+config_get_bool() { eval "$1=1"; }
+sed \
+    -e "s|^CONFIG=/etc/config/sub-store$|CONFIG='$CONFIG'|" \
+    -e "s|/etc/config/sub-store|$CONFIG|g" \
+    -e "s|/etc/sub-store|$TEST_DIR/etc-sub-store|g" \
+    -e "s|/usr/lib/sub-store/healthcheck\.js|$ROOT/run/payload/root/usr/lib/sub-store/healthcheck.js|g" \
+    -e "s|/usr/lib/sub-store/app-version\.js|$ROOT/run/payload/root/usr/lib/sub-store/app-version.js|g" \
+    -e 's|^\. /lib/functions\.sh$|:|' \
+    -e "s|^\. /usr/lib/sub-store/cron\.sh$|. '$ROOT/run/payload/root/usr/lib/sub-store/cron.sh'|" \
+    -e "s|^\. /usr/lib/sub-store/registry-image\.sh$|. '$ROOT/run/payload/root/usr/lib/sub-store/registry-image.sh'|" \
+    "$CTL" > "$TEST_DIR/sub-storectl"
+mkdir -p "$TEST_DIR/etc-sub-store"
+run_ctl() (
+    set -- "$@"
+    . "$TEST_DIR/sub-storectl"
+)
+
+# The public update command must dispatch into the no-op path without pulling
+# or replacing a current container.
+: > "$TEST_DIR/docker.log"
+REGISTRY_MODE=same
+run_ctl update > "$TEST_DIR/cli-update-output"
+grep -Fq '镜像已是最新，无需拉取或重建。' "$TEST_DIR/cli-update-output"
+if grep -Eq '^(pull|stop|rename|run|rm) ' "$TEST_DIR/docker.log"; then
+    echo 'The update command pulled or rebuilt an unchanged image.' >&2
+    exit 1
+fi
+
+# A changed image through the public command must replace the container,
+# retire only its previous image, and keep the mounted user data intact.
+: > "$TEST_DIR/docker.log"
+REGISTRY_MODE=new
+PULL_RESULT=new
+NEW_HEALTHY=1
+rm -f "$TEST_DIR/new" "$TEST_DIR/moved" "$TEST_DIR/image-removed"
+printf '%s\n' "$OLD_IMAGE_ID" > "$TEST_DIR/latest"
+run_ctl update > "$TEST_DIR/cli-image-update-output"
+[ -f "$TEST_DIR/new" ]
+[ ! -f "$TEST_DIR/moved" ]
+[ -f "$TEST_DIR/image-removed" ]
+[ "$(cat "$VOLUME_PATH/user-data")" = 'subscription data' ]
+grep -Fq '发现新镜像，开始拉取并更新容器...' "$TEST_DIR/cli-image-update-output"
+grep -q '^pull xream/sub-store@sha256:' "$TEST_DIR/docker.log"
+grep -q '^run -d ' "$TEST_DIR/docker.log"
+grep -Fq '旧镜像已清理，用户数据保留。' "$TEST_DIR/cli-image-update-output"
+
+# The installer-facing command must validate its version, use the same
+# no-op image path, then record successful deployment metadata.
+: > "$TEST_DIR/docker.log"
+run_ctl install-deploy update 0.0.24 > "$TEST_DIR/cli-install-deploy-output"
+[ "$(cat "$TEST_DIR/etc-sub-store/version")" = '0.0.24' ]
+[ -f "$TEST_DIR/etc-sub-store/installed" ]
+if run_ctl install-deploy update invalid > "$TEST_DIR/cli-invalid-version-output" 2>&1; then
+    echo 'The installer deployment command accepted an invalid package version.' >&2
+    exit 1
+fi
+
+# Restore the baseline used by the focused function-level edge-case matrix.
+rm -f "$TEST_DIR/new" "$TEST_DIR/moved" "$TEST_DIR/image-removed"
+printf '%s\n' "$OLD_IMAGE_ID" > "$TEST_DIR/latest"
+NEW_HEALTHY=0
+PULL_RESULT=same
+REGISTRY_MODE=same
+
 update_image > "$TEST_DIR/noop-output"
 grep -Fq '镜像已是最新' "$TEST_DIR/noop-output"
 if grep -Eq '^(pull|stop|rename|run|rm) ' "$TEST_DIR/docker.log"; then
@@ -240,7 +330,14 @@ for unchanged_case in changed-settings stopped arm64; do
             stopped) CONTAINER_STATE=exited ;;
             arm64) IMAGE_ARCH=arm64 ;;
         esac
-        update_image > "$TEST_DIR/unchanged-output"
+        if [ "$unchanged_case" = stopped ]; then
+            if update_image > "$TEST_DIR/unchanged-output" 2>&1; then
+                echo 'A stopped container was reported as a successful no-op update.' >&2
+                exit 1
+            fi
+        else
+            update_image > "$TEST_DIR/unchanged-output"
+        fi
         ! grep -Eq '^(pull|stop|rename|run|rm) ' "$TEST_DIR/docker.log"
     )
 done
@@ -289,7 +386,7 @@ grep -Fq 'new container failed to start' "$TEST_DIR/output"
 ! grep -q '^image rm ' "$TEST_DIR/docker.log"
 [ "$(cat "$VOLUME_PATH/user-data")" = 'subscription data' ]
 
-for cleanup_case in unused dangling shared tagged inspect-failed current-inspect-failed usage-failed remove-failed backup-failed single; do
+for cleanup_case in unused dangling shared tagged custom-tag latest-tag inspect-failed current-inspect-failed usage-failed remove-failed backup-failed single; do
     (
         CLEANUP_CASE="$cleanup_case"
         NEW_HEALTHY=1
@@ -307,7 +404,7 @@ for cleanup_case in unused dangling shared tagged inspect-failed current-inspect
             exit 1
         fi
         case "$CLEANUP_CASE" in
-            unused|dangling|single)
+            unused|dangling|single|latest-tag)
                 [ -f "$TEST_DIR/image-removed" ]
                 grep -Fxq "image rm $OLD_IMAGE_ID" "$TEST_DIR/docker.log"
                 backup_line="$(grep -n '^rm sub-store-rollback-' "$TEST_DIR/docker.log" | cut -d: -f1)"
@@ -326,19 +423,83 @@ for cleanup_case in unused dangling shared tagged inspect-failed current-inspect
     )
 done
 
+# Installer deployment keeps the old container until the explicit running-state
+# check passes, then retires it. A failed post-replacement check restores it.
+(
+    REGISTRY_MODE=new
+    PULL_RESULT=new
+    NEW_HEALTHY=1
+    CONTAINER_STATE=running
+    CLEANUP_CASE=unused
+    rm -f "$TEST_DIR/new" "$TEST_DIR/moved" "$TEST_DIR/image-removed" "$TEST_DIR/install-status-checked"
+    : > "$TEST_DIR/docker.log"
+    install_deploy update 0.0.24
+    [ -f "$TEST_DIR/new" ]
+    [ ! -f "$TEST_DIR/moved" ]
+    grep -q '^rm sub-store-rollback-' "$TEST_DIR/docker.log"
+    status_line="$(grep -nF "inspect -f {{.State.Status}} sub-store" "$TEST_DIR/docker.log" | tail -n 1 | cut -d: -f1)"
+    metadata_line="$(grep -nFx 'metadata 0.0.24' "$TEST_DIR/docker.log" | cut -d: -f1)"
+    backup_line="$(grep -n '^rm sub-store-rollback-' "$TEST_DIR/docker.log" | cut -d: -f1)"
+    [ "$status_line" -lt "$metadata_line" ] && [ "$metadata_line" -lt "$backup_line" ]
+)
+
+REGISTRY_MODE=new
+PULL_RESULT=new
+NEW_HEALTHY=1
+CONTAINER_STATE=running
+INSTALL_STATUS_OVERRIDE=exited
+CLEANUP_CASE=unused
+rm -f "$TEST_DIR/new" "$TEST_DIR/moved" "$TEST_DIR/image-removed" "$TEST_DIR/install-status-checked"
+: > "$TEST_DIR/docker.log"
+if (install_deploy update 0.0.24) > "$TEST_DIR/staged-rollback-output" 2>&1; then
+    echo 'Installer accepted a deployment whose post-update status was not running.' >&2
+    exit 1
+fi
+[ ! -f "$TEST_DIR/new" ]
+[ ! -f "$TEST_DIR/moved" ]
+grep -q '^rename sub-store-rollback-.* sub-store$' "$TEST_DIR/docker.log"
+! grep -q '^rm sub-store-rollback-' "$TEST_DIR/docker.log"
+unset INSTALL_STATUS_OVERRIDE
+
+REGISTRY_MODE=new
+PULL_RESULT=new
+NEW_HEALTHY=1
+CONTAINER_STATE=running
+INSTALL_METADATA_FAIL=1
+CLEANUP_CASE=unused
+rm -f "$TEST_DIR/new" "$TEST_DIR/moved" "$TEST_DIR/image-removed" "$TEST_DIR/install-status-checked"
+: > "$TEST_DIR/docker.log"
+if (install_deploy update 0.0.24) > "$TEST_DIR/staged-metadata-failure-output" 2>&1; then
+    echo 'Installer accepted metadata failure after a successful deployment.' >&2
+    exit 1
+fi
+[ ! -f "$TEST_DIR/new" ]
+[ ! -f "$TEST_DIR/moved" ]
+grep -q '^rename sub-store-rollback-.* sub-store$' "$TEST_DIR/docker.log"
+! grep -q '^rm sub-store-rollback-' "$TEST_DIR/docker.log"
+unset INSTALL_METADATA_FAIL
+
 awk '/^step 5 / {copy=1; next} /^step 6 / {exit} copy {print}' "$ROOT/run/payload/install.sh" |
     sed -e 's|/usr/bin/sub-storectl|test_ctl|g' \
         -e 's|/etc/init.d/sub-store|test_init|g' \
         -e "s|/etc/sub-store/installed|$TEST_DIR/installer-installed|g" \
-        -e "s|/etc/config/sub-store|$CONFIG|g" > "$TEST_DIR/install-deployment.sh"
+        -e "s|/etc/config/sub-store|$CONFIG|g" \
+        -e "s|/etc/sub-store/version|$TEST_DIR/package-version|g" > "$TEST_DIR/install-deployment.sh"
 
-for install_case in fresh cached pull-failed managed existing; do
+for install_case in fresh cached pull-failed managed managed-failed existing existing-failed; do
     rm -f "$TEST_DIR/installer-installed"
+    rm -f "$TEST_DIR/package-version" "$TEST_DIR/rollback-removed"
     : > "$TEST_DIR/installer.log"
     if (
         EXISTING=0
+        PACKAGE_VERSION=0.0.24
         case "$install_case" in
-            managed) EXISTING=1; touch "$TEST_DIR/installer-installed" ;;
+            managed|managed-failed)
+                EXISTING=1
+                touch "$TEST_DIR/installer-installed"
+                printf '0.0.23\n' > "$TEST_DIR/package-version"
+                ;;
+            existing-failed) EXISTING=1 ;;
             existing) EXISTING=1 ;;
         esac
         say() { :; }
@@ -348,6 +509,24 @@ for install_case in fresh cached pull-failed managed existing; do
         }
         test_ctl() {
             printf 'ctl %s\n' "$*" >> "$TEST_DIR/installer.log"
+            if [ "$1" = install-deploy ]; then
+                case "$install_case" in
+                    managed|managed-failed)
+                        [ -f "$TEST_DIR/installer-installed" ] &&
+                            [ "$(cat "$TEST_DIR/package-version")" = '0.0.23' ] || {
+                                echo 'Managed installer state changed before deployment validation.' >&2
+                                return 20
+                            }
+                        ;;
+                esac
+                case "$install_case" in
+                    managed-failed|existing-failed) return 1 ;;
+                esac
+                touch "$TEST_DIR/installer-installed"
+                printf '%s\n' "$PACKAGE_VERSION" > "$TEST_DIR/package-version"
+                printf 'metadata committed\n' >> "$TEST_DIR/installer.log"
+                touch "$TEST_DIR/rollback-removed"
+            fi
             if [ "$1" = status ]; then
                 printf 'running\n'
                 return 0
@@ -357,14 +536,30 @@ for install_case in fresh cached pull-failed managed existing; do
             fi
         }
         test_init() { printf 'init %s\n' "$*" >> "$TEST_DIR/installer.log"; }
+        commit_plugin_update() { printf 'commit plugin state\n' >> "$TEST_DIR/installer.log"; }
         . "$TEST_DIR/install-deployment.sh"
     ) > "$TEST_DIR/install-output" 2>&1; then
         [ "$install_case" != pull-failed ]
     else
-        [ "$install_case" = pull-failed ]
-        ! grep -q '^init ' "$TEST_DIR/installer.log"
-        ! grep -q '^uci set sub-store.main.image_ref=' "$TEST_DIR/installer.log"
-        continue
+        case "$install_case" in
+            pull-failed)
+                ! grep -q '^init ' "$TEST_DIR/installer.log"
+                ! grep -q '^uci set sub-store.main.image_ref=' "$TEST_DIR/installer.log"
+                continue
+                ;;
+            managed|managed-failed|existing-failed)
+                ! grep -q '^commit plugin state$' "$TEST_DIR/installer.log"
+                if [ "$install_case" = managed-failed ]; then
+                    [ "$(cat "$TEST_DIR/package-version")" = '0.0.23' ]
+                fi
+                continue
+                ;;
+            *)
+                echo "Unexpected installer failure: $install_case" >&2
+                cat "$TEST_DIR/install-output" >&2
+                exit 1
+                ;;
+        esac
     fi
     case "$install_case" in
         fresh|cached)
@@ -374,9 +569,20 @@ for install_case in fresh cached pull-failed managed existing; do
             start_line="$(grep -n '^init start$' "$TEST_DIR/installer.log" | cut -d: -f1)"
             [ "$pull_line" -lt "$start_line" ]
             ;;
-        managed) ! grep -q '^ctl pull$' "$TEST_DIR/installer.log"; grep -Fxq 'ctl update' "$TEST_DIR/installer.log" ;;
-        existing) ! grep -q '^ctl pull$' "$TEST_DIR/installer.log"; grep -Fxq 'ctl restart' "$TEST_DIR/installer.log" ;;
+        managed)
+            ! grep -q '^ctl pull$' "$TEST_DIR/installer.log"
+            grep -Fxq 'ctl install-deploy update 0.0.24' "$TEST_DIR/installer.log"
+            grep -Fxq 'metadata committed' "$TEST_DIR/installer.log"
+            grep -Fxq 'commit plugin state' "$TEST_DIR/installer.log"
+            ;;
+        existing)
+            ! grep -q '^ctl pull$' "$TEST_DIR/installer.log"
+            grep -Fxq 'ctl install-deploy restart 0.0.24' "$TEST_DIR/installer.log"
+            grep -Fxq 'metadata committed' "$TEST_DIR/installer.log"
+            grep -Fxq 'commit plugin state' "$TEST_DIR/installer.log"
+            ;;
     esac
+    [ "$(cat "$TEST_DIR/package-version")" = '0.0.24' ]
     [ "$(cat "$VOLUME_PATH/user-data")" = 'subscription data' ]
 done
 

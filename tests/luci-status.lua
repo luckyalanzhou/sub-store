@@ -1,6 +1,7 @@
 local root = arg[1] or "."
 local snapshot
 local busy = true
+local state_safe = true
 local calls = {}
 package.preload["luci.sys"] = function()
     return {
@@ -12,7 +13,10 @@ package.preload["luci.sys"] = function()
             if command:find("output.log", 1, true) then return "<script>log</script>\n" end
             return "test\n"
         end,
-        call = function() return busy and 0 or 1 end
+        call = function(command)
+            if command:find("stat -c", 1, true) then return state_safe and 0 or 1 end
+            return busy and 0 or 1
+        end
     }
 end
 package.preload["luci.jsonc"] = function()
@@ -58,4 +62,12 @@ assert(snapshot.container_log == "test" and snapshot.output == nil)
 arg = { "maintenance-log" }
 dofile(root .. "/run/payload/root/usr/lib/sub-store/status")
 assert(snapshot.output == "<script>log</script>" and snapshot.container_log == nil)
+state_safe = false
+calls = {}
+arg = { "maintenance-log" }
+dofile(root .. "/run/payload/root/usr/lib/sub-store/status")
+assert(snapshot.output == nil and snapshot.phase == "" and snapshot.action == "" and snapshot.operation == "")
+for _, command in ipairs(calls) do
+    assert(not command:find("output.log", 1, true))
+end
 print("LuCI snapshot, maintenance fast path and runtime diagnostics passed.")

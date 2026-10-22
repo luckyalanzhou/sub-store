@@ -159,15 +159,23 @@ jobs:
             scripts/build-run.sh \
             run/payload/install.sh \
             run/payload/lib/package-manager.sh \
+            run/payload/lib/install-lock.sh \
             run/payload/root/etc/init.d/sub-store \
+            run/payload/root/etc/init.d/sub-store-install-recovery \
             run/payload/root/usr/bin/sub-storectl \
+            run/payload/root/usr/lib/sub-store/install-recovery \
+            run/payload/root/usr/lib/sub-store/export-data \
+            run/payload/root/usr/lib/sub-store/registry-image.sh \
             run/payload/root/usr/lib/sub-store/cron.sh \
             run/payload/root/usr/lib/sub-store/job.sh \
             run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
+            tests/install-operation-lock.sh \
+            tests/install-recovery.sh \
             tests/install-log.sh \
             tests/export-data.sh \
+            tests/uninstall-cleanup.sh \
             tests/service-init.sh \
             tests/package-manager.sh \
             tests/plugin-install-rollback.sh \
@@ -192,15 +200,23 @@ jobs:
             scripts/build-run.sh \
             run/payload/install.sh \
             run/payload/lib/package-manager.sh \
+            run/payload/lib/install-lock.sh \
             run/payload/root/etc/init.d/sub-store \
+            run/payload/root/etc/init.d/sub-store-install-recovery \
             run/payload/root/usr/bin/sub-storectl \
+            run/payload/root/usr/lib/sub-store/install-recovery \
+            run/payload/root/usr/lib/sub-store/export-data \
+            run/payload/root/usr/lib/sub-store/registry-image.sh \
             run/payload/root/usr/lib/sub-store/cron.sh \
             run/payload/root/usr/lib/sub-store/job.sh \
             run/payload/root/usr/lib/sub-store/plugin-update \
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
+            tests/install-operation-lock.sh \
+            tests/install-recovery.sh \
             tests/install-log.sh \
             tests/export-data.sh \
+            tests/uninstall-cleanup.sh \
             tests/service-init.sh \
             tests/package-manager.sh \
             tests/plugin-install-rollback.sh \
@@ -232,11 +248,15 @@ jobs:
           busybox ash tests/image-update.sh
           BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
           busybox ash tests/install-permissions.sh
+          echo 'Running BusyBox regression: install-operation-lock'
+          busybox ash tests/install-operation-lock.sh
+          busybox ash tests/install-recovery.sh
           busybox ash tests/install-log.sh
           BUSYBOX_TEST=1 busybox ash tests/export-data.sh
           busybox ash tests/service-init.sh
           busybox ash tests/package-manager.sh
           busybox ash tests/plugin-install-rollback.sh
+          busybox ash tests/uninstall-cleanup.sh
           busybox ash tests/plugin-update.sh
 
       - name: Check native LuCI view and status endpoint

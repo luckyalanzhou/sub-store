@@ -115,6 +115,31 @@ def wait_for_ssh(port: int, private_key: pathlib.Path, timeout: int = 180) -> No
     raise TimeoutError(f"Could not connect to iStoreOS over forwarded SSH port {port}.")
 
 
+def reboot_guest(port: int, private_key: pathlib.Path) -> None:
+    result = subprocess.run(
+        [
+            "ssh",
+            "-i", str(private_key),
+            "-p", str(port),
+            "-o", "BatchMode=yes",
+            "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-o", "ConnectTimeout=10",
+            "root@127.0.0.1",
+            "reboot",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        check=False,
+    )
+    # OpenSSH commonly returns 255 when the guest closes the connection during reboot.
+    if result.returncode not in (0, 255):
+        raise RuntimeError(f"Could not request an iStoreOS guest reboot (exit {result.returncode}).")
+
+
 def ssh_command(
     port: int,
     private_key: pathlib.Path,
@@ -370,10 +395,40 @@ def main() -> None:
             ).split()
             if len(upgraded) != 2 or upgraded != [config_before, volume_path]:
                 raise RuntimeError(f"Full upgrade changed configuration or user data: {upgraded}")
+
+            ssh_command(
+                ssh_port,
+                key_path,
+                "set -e; tx=/etc/sub-store/install-transaction; "
+                "umask 077; mkdir -p \"$tx/plugin\"; chmod 700 \"$tx\" \"$tx/plugin\"; "
+                "printf 'prepared\\n' > \"$tx/state\"; : > \"$tx/plugin/states\"; "
+                "printf 'sub-store-rollback-123456\\n' > \"$tx/container-name\"; "
+                "docker inspect -f '{{.Id}}' sub-store > \"$tx/container-id\"; "
+                "printf '1\\n' > \"$tx/container-was-running\"; "
+                "chmod 600 \"$tx/state\" \"$tx/container-name\" \"$tx/container-id\" \"$tx/container-was-running\"; "
+                "docker stop sub-store >/dev/null",
+            )
+            print("Simulating power loss after stopping the previous container.", flush=True)
+            reboot_guest(ssh_port, key_path)
+            wait_for_ssh(ssh_port, key_path, timeout=BOOT_TIMEOUT_SECONDS)
+            recovered = ssh_command(
+                ssh_port,
+                key_path,
+                "set -e; test ! -e /etc/sub-store/install-transaction; "
+                "test \"$(/usr/bin/sub-storectl status)\" = running; "
+                "test \"$(cat /etc/sub-store/version)\" = " + FULL_UPGRADE_VERSION + "; "
+                "volume=$(docker volume inspect -f '{{.Mountpoint}}' sub-store-data); "
+                "test \"$(cat \"$volume/ci-marker\")\" = ci-data-marker; "
+                "config=$(sha256sum /etc/config/sub-store | cut -d' ' -f1); "
+                "printf '%s %s\\n' \"$config\" \"$volume\"",
+            ).split()
+            if recovered != [config_before, volume_path]:
+                raise RuntimeError(f"Boot recovery changed configuration or user data: {recovered}")
             print(
                 f"iStoreOS {release}: {INITIAL_VERSION} first install, "
                 f"{PLUGIN_UPDATE_VERSION} plugin-only update, and "
-                f"{FULL_UPGRADE_VERSION} full upgrade passed; user data was preserved.",
+                f"{FULL_UPGRADE_VERSION} full upgrade and interrupted-install recovery passed; "
+                "user data was preserved.",
                 flush=True,
             )
         except Exception:

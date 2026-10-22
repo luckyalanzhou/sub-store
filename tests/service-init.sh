@@ -12,6 +12,7 @@ if grep -q '^USE_PROCD=' "$SERVICE"; then
 fi
 
 grep -Fq '/usr/bin/sub-storectl start' "$SERVICE"
+grep -Fq '/usr/lib/sub-store/install-recovery || return 1' "$SERVICE"
 grep -Fq '/usr/bin/sub-storectl stop' "$SERVICE"
 grep -Fq '/usr/bin/sub-storectl restart' "$SERVICE"
 

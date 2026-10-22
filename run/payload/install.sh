@@ -4,6 +4,7 @@ set -eu
 PACKAGE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "$PACKAGE_DIR/lib/package-manager.sh"
 . "$PACKAGE_DIR/lib/install-log.sh"
+. "$PACKAGE_DIR/lib/install-lock.sh"
 LOG=/tmp/sub-store-run-install.log
 LOG_MAX_BYTES=1048576
 INSTALL_STEP="准备安装"
@@ -13,6 +14,7 @@ PLUGIN_UPDATE_ACTIVE=0
 PLUGIN_TARGET_PREFIX=""
 FULL_INSTALL_ACTIVE=0
 SERVICE_WAS_ENABLED=0
+INSTALL_TRANSACTION_DIR=/etc/sub-store/install-transaction
 initialize_install_log "$LOG" || {
     echo "Could not safely initialize the installer log at $LOG." >&2
     exit 1
@@ -93,13 +95,30 @@ rollback_plugin_update() {
     fi
     PLUGIN_UPDATE_ACTIVE=0
     rm -rf "$PLUGIN_BACKUP_DIR"
+    if [ "${FULL_INSTALL_ACTIVE:-0}" = "1" ]; then
+        rm -rf "$INSTALL_TRANSACTION_DIR"
+    fi
     PLUGIN_BACKUP_DIR=""
     refresh_luci_cache
     say "LuCI 插件文件已恢复到更新前状态。"
 }
 
 prepare_plugin_rollback() {
-    PLUGIN_BACKUP_DIR="$(umask 077; mktemp -d /tmp/sub-store-plugin-rollback.XXXXXX)"
+    if [ "${FULL_INSTALL_ACTIVE:-0}" = "1" ]; then
+        [ ! -e "$INSTALL_TRANSACTION_DIR" ] && [ ! -L "$INSTALL_TRANSACTION_DIR" ] ||
+            fail "An unfinished installer transaction exists; recover it before installing again."
+        (umask 077; mkdir "$INSTALL_TRANSACTION_DIR") ||
+            fail "Cannot create persistent installer recovery storage."
+        chmod 700 "$INSTALL_TRANSACTION_DIR"
+        printf '%s\n' preparing > "$INSTALL_TRANSACTION_DIR/state"
+        printf '%s-%s\n' "$(date +%s)" "$$" > "$INSTALL_TRANSACTION_DIR/new-container-token"
+        chmod 600 "$INSTALL_TRANSACTION_DIR/state" "$INSTALL_TRANSACTION_DIR/new-container-token"
+        mkdir "$INSTALL_TRANSACTION_DIR/plugin" ||
+            fail "Cannot create persistent installer recovery storage."
+        PLUGIN_BACKUP_DIR="$INSTALL_TRANSACTION_DIR/plugin"
+    else
+        PLUGIN_BACKUP_DIR="$(umask 077; mktemp -d /tmp/sub-store-plugin-rollback.XXXXXX)"
+    fi
     [ -n "$PLUGIN_BACKUP_DIR" ] && [ -d "$PLUGIN_BACKUP_DIR" ] || fail "Cannot create a temporary rollback directory."
     : > "$PLUGIN_BACKUP_DIR/states"
     (cd "$PACKAGE_DIR/root" && find . -type f -print) > "$PLUGIN_BACKUP_DIR/manifest" ||
@@ -134,11 +153,37 @@ prepare_plugin_rollback() {
             printf 'absent %s\n' "$relative_path" >> "$PLUGIN_BACKUP_DIR/states"
         fi
     done < "$PLUGIN_BACKUP_DIR/manifest"
+    if [ "${FULL_INSTALL_ACTIVE:-0}" = "1" ]; then
+        chmod 600 "$PLUGIN_BACKUP_DIR/states" "$PLUGIN_BACKUP_DIR/manifest"
+        printf '%s\n' prepared > "$INSTALL_TRANSACTION_DIR/state"
+        chmod 600 "$INSTALL_TRANSACTION_DIR/state"
+    fi
     PLUGIN_UPDATE_ACTIVE=1
 }
 
+install_recovery_hook() {
+    mkdir -p /usr/lib/sub-store /etc/rc.d
+    cp "$PACKAGE_DIR/root/usr/lib/sub-store/install-recovery" /usr/lib/sub-store/install-recovery ||
+        fail "Cannot install persistent recovery support."
+    cp "$PACKAGE_DIR/root/etc/init.d/sub-store-install-recovery" /etc/init.d/sub-store-install-recovery ||
+        fail "Cannot install the recovery startup hook."
+    chmod 755 /usr/lib/sub-store/install-recovery /etc/init.d/sub-store-install-recovery
+    ln -sf ../init.d/sub-store-install-recovery /etc/rc.d/S99sub-store-install-recovery
+}
+
 commit_plugin_update() {
-    rm -rf "$PLUGIN_BACKUP_DIR"
+    if [ "${FULL_INSTALL_ACTIVE:-0}" = "1" ] && [ -d "$INSTALL_TRANSACTION_DIR" ] &&
+        [ "$(cat "$INSTALL_TRANSACTION_DIR/state" 2>/dev/null || true)" = prepared ]; then
+        printf '%s\n' committed > "$INSTALL_TRANSACTION_DIR/state.tmp.$$"
+        chmod 600 "$INSTALL_TRANSACTION_DIR/state.tmp.$$"
+        mv -f "$INSTALL_TRANSACTION_DIR/state.tmp.$$" "$INSTALL_TRANSACTION_DIR/state"
+    fi
+    if ! rm -rf "$PLUGIN_BACKUP_DIR"; then
+        say "WARNING: Could not remove the temporary LuCI rollback files." || true
+    fi
+    if [ "${FULL_INSTALL_ACTIVE:-0}" = "1" ]; then
+        rm -rf "$INSTALL_TRANSACTION_DIR"
+    fi
     PLUGIN_BACKUP_DIR=""
     PLUGIN_UPDATE_ACTIVE=0
 }
@@ -149,7 +194,21 @@ finish() {
         if [ "$FULL_INSTALL_ACTIVE" = "1" ] && [ "$SERVICE_WAS_ENABLED" = "0" ] && [ -x /etc/init.d/sub-store ]; then
             /etc/init.d/sub-store disable >/dev/null 2>&1 || true
         fi
-        rollback_plugin_update || true
+        if [ "$FULL_INSTALL_ACTIVE" = "1" ] && [ -x /usr/lib/sub-store/install-recovery ] &&
+            [ -d "$INSTALL_TRANSACTION_DIR" ]; then
+            if SUB_STORE_INSTALL_RECOVERY_FORCE=1 /usr/lib/sub-store/install-recovery; then
+                PLUGIN_UPDATE_ACTIVE=0
+                PLUGIN_BACKUP_DIR=""
+                refresh_luci_cache
+            else
+                say "ERROR: Installer recovery data was retained at $INSTALL_TRANSACTION_DIR for the next startup."
+            fi
+        else
+            rollback_plugin_update || true
+        fi
+    fi
+    release_install_operation_lock || true
+    if [ "$INSTALL_OK" != "1" ]; then
         say "安装未完成，阶段：$INSTALL_STEP；退出码：$result"
         say "安装阶段日志：$LOG。修复原因后可以重新上传安装包重试。"
     fi
@@ -170,6 +229,13 @@ fi
 
 if ! detect_package_manager; then
     fail "This installer requires iStoreOS/OpenWrt with opkg or apk."
+fi
+
+acquire_install_operation_lock || fail "Another sub-store operation may be running; retry after it finishes."
+
+if [ -x /usr/lib/sub-store/install-recovery ]; then
+    SUB_STORE_INSTALL_RECOVERY_FORCE=1 /usr/lib/sub-store/install-recovery ||
+        fail "An earlier installer transaction could not be recovered."
 fi
 
 if [ "$PLUGIN_ONLY" = "1" ]; then
@@ -215,6 +281,8 @@ if [ "$PLUGIN_ONLY" = "1" ]; then
     mkdir -p "$RUNNING_DIR/usr/bin" "$RUNNING_DIR/usr/lib/sub-store"
     for active_file in \
         usr/bin/sub-storectl \
+        usr/lib/sub-store/export-data \
+        usr/lib/sub-store/registry-image.sh \
         usr/lib/sub-store/job.sh \
         usr/lib/sub-store/plugin-update; do
         active_path="$(plugin_target_path "$active_file")"
@@ -227,8 +295,9 @@ if [ "$PLUGIN_ONLY" = "1" ]; then
     cleanup_stale_luci_views || fail "Cannot remove outdated LuCI view files."
     . /usr/lib/sub-store/permissions.sh
     sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
-    chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
+    chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/export-data /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
         /usr/lib/sub-store/plugin-update /etc/init.d/sub-store
+    chmod 644 /usr/lib/sub-store/registry-image.sh
     chmod 644 /usr/lib/sub-store/app-version.js
     rm -f /usr/lib/lua/luci/controller/sub_store.lua /usr/lib/lua/luci/model/cbi/sub_store.lua \
         /usr/lib/sub-store/check-update
@@ -308,12 +377,15 @@ step 4 "安装管理界面并准备配置"
 [ -e /etc/rc.d/S99sub-store ] && SERVICE_WAS_ENABLED=1
 FULL_INSTALL_ACTIVE=1
 prepare_plugin_rollback
+install_recovery_hook
 (umask 022; cp -R "$PACKAGE_DIR/root/." /)
 cleanup_stale_luci_views || fail "Cannot remove outdated LuCI view files."
 . /usr/lib/sub-store/permissions.sh
 sub_store_public_permissions "" || fail "Cannot set LuCI public asset permissions."
-chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
+chmod 755 /usr/bin/sub-storectl /usr/lib/sub-store/install-recovery /etc/init.d/sub-store-install-recovery \
+    /usr/lib/sub-store/export-data /usr/lib/sub-store/job.sh /usr/lib/sub-store/status \
     /usr/lib/sub-store/plugin-update /etc/init.d/sub-store
+chmod 644 /usr/lib/sub-store/registry-image.sh
 chmod 644 /usr/lib/sub-store/app-version.js
 # Remove only the obsolete files shipped by this package.
 rm -f /usr/lib/lua/luci/controller/sub_store.lua /usr/lib/lua/luci/model/cbi/sub_store.lua /usr/lib/sub-store/check-update
@@ -404,18 +476,12 @@ if [ "$EXISTING" != "1" ]; then
 fi
 
 if [ "$MANAGED_UPGRADE" = "1" ]; then
-    if /etc/init.d/sub-store enable && /usr/bin/sub-storectl update; then
-        touch /etc/sub-store/installed
-        chmod 600 /etc/sub-store/installed
-    else
-        fail "sub-store update failed; the previous container was restored when possible."
+    if ! /etc/init.d/sub-store enable || ! /usr/bin/sub-storectl install-deploy update "$PACKAGE_VERSION"; then
+        fail "sub-store update failed; the previous container and installer state were restored when possible."
     fi
 elif [ "$EXISTING" = "1" ]; then
-    if /etc/init.d/sub-store enable && /usr/bin/sub-storectl restart; then
-        touch /etc/sub-store/installed
-        chmod 600 /etc/sub-store/installed
-    else
-        fail "Existing sub-store migration failed; the previous container was restored when possible."
+    if ! /etc/init.d/sub-store enable || ! /usr/bin/sub-storectl install-deploy restart "$PACKAGE_VERSION"; then
+        fail "Existing sub-store migration failed; the previous container and installer state were restored when possible."
     fi
 elif [ -n "$(uci -q get sub-store.main.data_dir 2>/dev/null || true)" ]; then
     LEGACY_DATA_DIR="$(uci -q get sub-store.main.data_dir)"
@@ -437,30 +503,42 @@ else
     exit 1
 fi
 
-container_status="$(/usr/bin/sub-storectl status 2>/dev/null || true)"
-[ "$container_status" = "running" ] ||
-    fail "sub-store did not start successfully (container status: ${container_status:-unknown})."
+if [ "$EXISTING" = "1" ]; then
+    commit_plugin_update
+    FULL_INSTALL_ACTIVE=0
+fi
 
-uci -q delete sub-store.main.data_dir >/dev/null 2>&1 || true
-uci -q delete sub-store.main.port >/dev/null 2>&1 || true
-uci commit sub-store
-chmod 600 /etc/config/sub-store
+if [ "$EXISTING" != "1" ]; then
+    container_status="$(/usr/bin/sub-storectl status 2>/dev/null || true)"
+    [ "$container_status" = "running" ] ||
+        fail "sub-store did not start successfully (container status: ${container_status:-unknown})."
+fi
+
+if [ "$EXISTING" != "1" ]; then
+    uci -q delete sub-store.main.data_dir >/dev/null 2>&1 || true
+    uci -q delete sub-store.main.port >/dev/null 2>&1 || true
+    uci commit sub-store
+    chmod 600 /etc/config/sub-store
+    printf '%s\n' "$PACKAGE_VERSION" >/etc/sub-store/version
+    chmod 644 /etc/sub-store/version
+fi
+
+# The container, UCI settings, plugin files, and package version now describe
+# the same successful installation.
+if [ "$EXISTING" != "1" ]; then
+    commit_plugin_update
+    FULL_INSTALL_ACTIVE=0
+fi
+INSTALL_OK=1
 
 step 6 "完成安装并输出访问入口"
-printf '%s\n' "$PACKAGE_VERSION" >/etc/sub-store/version
-chmod 644 /etc/sub-store/version
 
-# The managed container, UCI settings, plugin files, and package version now
-# describe the same successful installation. Later cache refreshes are not part
-# of the rollback boundary because the previous container has already been
-# retired by sub-storectl.
-commit_plugin_update
-FULL_INSTALL_ACTIVE=0
-
-rm -f /tmp/luci-indexcache
-rm -f /tmp/luci-indexcache.*
-rm -rf /tmp/luci-modulecache
-[ ! -x /etc/init.d/rpcd ] || /etc/init.d/rpcd reload
+rm -f /tmp/luci-indexcache || say "WARNING: Could not remove the LuCI index cache; refresh the page after installation." || true
+rm -f /tmp/luci-indexcache.* || say "WARNING: Could not remove the LuCI index cache; refresh the page after installation." || true
+rm -rf /tmp/luci-modulecache || say "WARNING: Could not remove the LuCI module cache; refresh the page after installation." || true
+if [ -x /etc/init.d/rpcd ] && ! /etc/init.d/rpcd reload; then
+    say "WARNING: Could not reload rpcd; refresh the LuCI page after installation." || true
+fi
 say "LuCI 页面已更新；如入口未刷新，请重新登录路由器管理页面。"
 
 say "sub-store package installed."
@@ -469,5 +547,3 @@ say "Management URL: $(/usr/bin/sub-storectl url)"
 say "Docker storage: $(/usr/bin/sub-storectl storage 2>/dev/null || echo unavailable)"
 say "Package version: $PACKAGE_VERSION"
 say "The first install and image pull require Internet access. No WAN firewall rule or port forward was added."
-
-INSTALL_OK=1

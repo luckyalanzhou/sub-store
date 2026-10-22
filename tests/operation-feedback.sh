@@ -36,6 +36,15 @@ grep -q 'operation output: clear-maintenance-logs' "$TMP/state/output.log"
 run_sh "$TMP/job" start
 grep -q '操作成功' "$TMP/state/status"
 grep -q 'operation output: start' "$TMP/state/output.log"
+case "$(uname -s)" in
+    MINGW*|MSYS*) ;;
+    *)
+        [ "$(stat -c '%a' "$TMP/state/output.log")" = 600 ] || {
+            echo 'The operation log does not have mode 600.' >&2
+            exit 1
+        }
+        ;;
+esac
 [ ! -d "$TMP/state/lock" ]
 run_sh "$TMP/job" check-plugin-update
 grep -q 'operation output: check-plugin-update' "$TMP/state/output.log"
@@ -53,6 +62,10 @@ printf '%s\n' "$$" > "$TMP/state/lock/pid"
 if run_sh "$TMP/job" stop; then exit 1; fi
 grep -q '退出码：7' "$TMP/state/status"
 rm -f "$TMP/state/lock/pid"
+if run_sh "$TMP/job" stop; then
+    echo 'An operation reclaimed a lock while its owner was initializing.' >&2
+    exit 1
+fi
 rmdir "$TMP/state/lock"
 if run_sh "$TMP/job" arbitrary; then exit 1; fi
 run_sh "$TMP/job" --enqueue restart
@@ -101,4 +114,46 @@ done
 grep -q success "$TMP/state/phase"
 [ ! -e "$TMP/state/output.pipe" ]
 [ ! -e "$TMP/state/output.chunk.999" ]
+
+# State and log paths in /tmp must not follow links planted before the first
+# request or between requests. A privileged action must leave the target alone.
+mkdir "$TMP/attacker"
+printf '%s\n' 'sentinel must remain unchanged' > "$TMP/sentinel"
+ln -s "$TMP/sentinel" "$TMP/attacker/output.log"
+ln -s "$TMP/sentinel" "$TMP/link-probe"
+if [ -L "$TMP/link-probe" ]; then
+    rm -rf "$TMP/state"
+    ln -s "$TMP/attacker" "$TMP/state"
+    if run_sh "$TMP/job" start >/dev/null 2>&1; then
+        echo 'An operation followed a symlinked state directory.' >&2
+        exit 1
+    fi
+    [ "$(cat "$TMP/sentinel")" = 'sentinel must remain unchanged' ] || {
+        echo 'A symlinked state directory modified its target.' >&2
+        exit 1
+    }
+    rm "$TMP/state"
+    mkdir "$TMP/state"
+    ln -s "$TMP/sentinel" "$TMP/state/output.log"
+    if run_sh "$TMP/job" start >/dev/null 2>&1; then
+        echo 'An operation followed a symlinked output log.' >&2
+        exit 1
+    fi
+    [ "$(cat "$TMP/sentinel")" = 'sentinel must remain unchanged' ] || {
+        echo 'A symlinked output log modified its target.' >&2
+        exit 1
+    }
+    rm "$TMP/state/output.log"
+    ln -s "$TMP/sentinel" "$TMP/state/snapshot"
+    if run_sh "$TMP/job" start >/dev/null 2>&1; then
+        echo 'An operation accepted a symlinked snapshot.' >&2
+        exit 1
+    fi
+    [ "$(cat "$TMP/sentinel")" = 'sentinel must remain unchanged' ] || {
+        echo 'A symlinked snapshot modified its target.' >&2
+        exit 1
+    }
+else
+    echo 'Symbolic-link regression checks skipped: this shell cannot create symlinks.' >&2
+fi
 echo "Operation success, failure and concurrency checks passed."

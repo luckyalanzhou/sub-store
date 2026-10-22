@@ -1,0 +1,195 @@
+#!/bin/sh
+set -eu
+umask 077
+
+ROOT="${SUB_STORE_INSTALL_ROOT:-/}"
+TX="$ROOT/etc/sub-store/install-transaction"
+DOCKER="${SUB_STORE_DOCKER:-docker}"
+root_path() {
+    printf '%s%s\n' "${ROOT%/}" "$1"
+}
+
+[ ! -e "$TX" ] && [ ! -L "$TX" ] && exit 0
+[ -d "$TX" ] && [ ! -L "$TX" ] || {
+    echo 'Installer recovery state is unsafe; refusing to continue.' >&2
+    exit 1
+}
+
+# The installer calls the normal service start path while its transaction is
+# still active. Do not mistake that live transaction for one interrupted by a
+# reboot. Installer-owned recovery calls explicitly opt in with FORCE=1.
+if [ "${SUB_STORE_INSTALL_RECOVERY_FORCE:-0}" != 1 ]; then
+    lock_pid_file="${SUB_STORE_OPERATION_STATE:-/tmp/sub-store-operation}/lock/pid"
+    if [ -f "$lock_pid_file" ] && [ ! -L "$lock_pid_file" ]; then
+        lock_pid="$(cat "$lock_pid_file" 2>/dev/null || true)"
+        case "$lock_pid" in
+            ''|*[!0-9]*) ;;
+            *)
+                if kill -0 "$lock_pid" 2>/dev/null; then
+                    exit 0
+                fi
+                ;;
+        esac
+    fi
+fi
+
+if [ ! -e "$TX/state" ] && [ ! -L "$TX/state" ]; then
+    for journal_file in container-name container-id container-was-running new-container-id new-container-token; do
+        [ ! -e "$TX/$journal_file" ] && [ ! -L "$TX/$journal_file" ] || {
+            echo 'Installer recovery state is incomplete; preserving recovery data.' >&2
+            exit 1
+        }
+    done
+    rm -rf "$TX"
+    exit 0
+fi
+[ ! -L "$TX/state" ] || { echo 'Installer recovery state is unsafe.' >&2; exit 1; }
+state="$(cat "$TX/state" 2>/dev/null || true)"
+case "$state" in
+    preparing|prepared|committed) ;;
+    *) echo 'Installer recovery state is invalid; refusing to continue.' >&2; exit 1 ;;
+esac
+
+if [ "$state" = preparing ]; then
+    # The installer has not modified plugin or container state until it marks
+    # the complete backup manifest as prepared.
+    rm -rf "$TX"
+    exit 0
+fi
+
+container_name=""
+container_id=""
+if [ -f "$TX/container-name" ] && [ ! -L "$TX/container-name" ]; then
+    container_name="$(cat "$TX/container-name")"
+fi
+if [ -f "$TX/container-id" ] && [ ! -L "$TX/container-id" ]; then
+    container_id="$(cat "$TX/container-id")"
+fi
+case "$container_name" in
+    '') ;;
+    sub-store-rollback-[0-9]* )
+        case "$container_name" in *[!A-Za-z0-9_-]*) echo 'Installer rollback container name is invalid.' >&2; exit 1 ;; esac
+        ;;
+    *) echo 'Installer rollback container name is invalid.' >&2; exit 1 ;;
+esac
+
+if [ -n "$container_name" ] || [ -f "$TX/new-container-id" ] || [ -f "$TX/new-container-token" ]; then
+    if ! "$DOCKER" info >/dev/null 2>&1; then
+        [ ! -x "$(root_path /etc/init.d/dockerd)" ] || "$(root_path /etc/init.d/dockerd)" start >/dev/null 2>&1 || true
+        attempt=0
+        until "$DOCKER" info >/dev/null 2>&1; do
+            attempt=$((attempt + 1))
+            [ "$attempt" -lt 30 ] || {
+                echo 'Docker is not ready; installer recovery state was retained.' >&2
+                exit 1
+            }
+            sleep 2
+        done
+    fi
+fi
+
+container_exists() { "$DOCKER" inspect "$1" >/dev/null 2>&1; }
+verify_official() {
+    image="$($DOCKER inspect -f '{{.Config.Image}}' "$1" 2>/dev/null || true)"
+    case "$image" in
+        xream/sub-store|xream/sub-store:*|xream/sub-store@sha256:*|docker.io/xream/sub-store|docker.io/xream/sub-store:*|docker.io/xream/sub-store@sha256:*) ;;
+        *) echo "Refusing to modify non-Sub-Store container $1." >&2; return 1 ;;
+    esac
+}
+
+if [ "$state" = committed ]; then
+    if [ -n "$container_name" ] && container_exists "$container_name"; then
+        verify_official "$container_name"
+        actual_id="$($DOCKER inspect -f '{{.Id}}' "$container_name" 2>/dev/null || true)"
+        [ -z "$container_id" ] || [ "$actual_id" = "$container_id" ] || {
+            echo 'Committed rollback container identity changed; refusing to remove it.' >&2
+            exit 1
+        }
+        "$DOCKER" rm "$container_name" >/dev/null
+    fi
+else
+    states="$TX/plugin/states"
+    if [ -f "$states" ] && [ ! -L "$states" ]; then
+        while IFS=' ' read -r prior_state relative_path; do
+            [ -n "$relative_path" ] || continue
+            case "$relative_path" in
+                /*|../*|*/../*|*/..|*//*|*[!A-Za-z0-9._/-]*)
+                    echo 'Installer recovery file path is invalid; refusing to continue.' >&2
+                    exit 1
+                    ;;
+            esac
+            target="$(root_path "/$relative_path")"
+            case "$prior_state" in
+                present)
+                    source="$TX/plugin/files/$relative_path"
+                    [ -f "$source" ] && [ ! -L "$source" ] || {
+                        echo "Installer recovery backup is missing: $relative_path" >&2
+                        exit 1
+                    }
+                    mkdir -p "$(dirname "$target")"
+                    cp -p "$source" "$target"
+                    ;;
+                absent)
+                    rm -f "$target"
+                    ;;
+                *) echo 'Installer recovery manifest is invalid.' >&2; exit 1 ;;
+            esac
+        done < "$states"
+    elif [ "$state" = prepared ]; then
+        echo 'Installer recovery manifest is missing; preserving recovery data.' >&2
+        exit 1
+    fi
+
+    if [ -n "$container_name" ] && container_exists "$container_name"; then
+        verify_official "$container_name"
+        actual_id="$($DOCKER inspect -f '{{.Id}}' "$container_name" 2>/dev/null || true)"
+        [ -n "$container_id" ] && [ "$actual_id" = "$container_id" ] || {
+            echo 'Installer rollback container identity changed; refusing to replace it.' >&2
+            exit 1
+        }
+        if container_exists sub-store; then
+            verify_official sub-store
+            "$DOCKER" rm -f sub-store >/dev/null
+        fi
+        "$DOCKER" rename "$container_name" sub-store
+        if [ "$(cat "$TX/container-was-running" 2>/dev/null || true)" = 1 ]; then
+            "$DOCKER" start sub-store >/dev/null
+        fi
+    elif [ -z "$container_name" ] && [ -f "$TX/new-container-id" ] && [ ! -L "$TX/new-container-id" ] &&
+        container_exists sub-store; then
+        new_id="$(cat "$TX/new-container-id")"
+        actual_id="$("$DOCKER" inspect -f '{{.Id}}' sub-store 2>/dev/null || true)"
+        [ -n "$new_id" ] && [ "$actual_id" = "$new_id" ] || {
+            echo 'New installer container identity changed; refusing to remove it.' >&2
+            exit 1
+        }
+        verify_official sub-store
+        "$DOCKER" rm -f sub-store >/dev/null
+    elif [ -z "$container_name" ] && [ ! -L "$TX/new-container-token" ] &&
+        [ -f "$TX/new-container-token" ] && container_exists sub-store; then
+        expected_token="$(cat "$TX/new-container-token")"
+        actual_token="$($DOCKER inspect -f '{{ index .Config.Labels "io.sub-store.install-transaction" }}' sub-store 2>/dev/null || true)"
+        if [ -n "$expected_token" ] && [ "$actual_token" = "$expected_token" ]; then
+            verify_official sub-store
+            "$DOCKER" rm -f sub-store >/dev/null
+        fi
+    elif [ -z "$container_name" ] && container_exists sub-store &&
+        [ "$(cat "$TX/container-was-running" 2>/dev/null || true)" = 1 ]; then
+        # The old container may have been stopped just before the rename was interrupted.
+        verify_official sub-store
+        "$DOCKER" start sub-store >/dev/null
+    fi
+    if [ -n "$container_name" ] && ! container_exists "$container_name" && container_exists sub-store &&
+        [ "$(cat "$TX/container-was-running" 2>/dev/null || true)" = 1 ]; then
+        verify_official sub-store
+        actual_id="$("$DOCKER" inspect -f '{{.Id}}' sub-store 2>/dev/null || true)"
+        [ "$actual_id" = "$container_id" ] || {
+            echo 'Current container identity changed during installer recovery.' >&2
+            exit 1
+        }
+        "$DOCKER" start sub-store >/dev/null
+    fi
+fi
+
+rm -rf "$TX"
+exit 0

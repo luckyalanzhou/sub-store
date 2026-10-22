@@ -18,7 +18,25 @@ if [ "$MODE" = "--enqueue" ] && ! command -v nohup >/dev/null 2>&1; then
     exit 1
 fi
 STATE=/tmp/sub-store-operation
-mkdir -p "$STATE"
+if [ ! -e "$STATE" ] && [ ! -L "$STATE" ]; then
+    mkdir "$STATE" 2>/dev/null || true
+fi
+state_owner="$(id -u)"
+state_info="$(stat -c '%F:%u:%a' "$STATE" 2>/dev/null || true)"
+if [ -L "$STATE" ] || [ "$state_info" != "directory:$state_owner:700" ]; then
+    echo "Operation state directory is unsafe; refusing to continue." >&2
+    exit 1
+fi
+for state_file in action phase status snapshot output.log; do
+    if [ -L "$STATE/$state_file" ]; then
+        echo "Operation state file is unsafe; refusing to continue." >&2
+        exit 1
+    fi
+done
+if [ -L "$STATE/lock" ] || [ -L "$STATE/lock/pid" ]; then
+    echo "Operation lock is unsafe; refusing to continue." >&2
+    exit 1
+fi
 write_operation_state() {
     phase="$1"
     message="$2"
@@ -53,7 +71,14 @@ else
     if ! mkdir "$STATE/lock" 2>/dev/null; then
         lock_pid="$(cat "$STATE/lock/pid" 2>/dev/null || true)"
         case "$lock_pid" in
-            ''|*[!0-9]*) lock_pid="" ;;
+            '')
+                echo "Another operation is starting; try again shortly." >&2
+                exit 1
+                ;;
+            *[!0-9]*)
+                echo "Operation lock is invalid; refusing to reclaim it." >&2
+                exit 1
+                ;;
             *) [ "$lock_pid" -gt 0 ] 2>/dev/null || lock_pid="" ;;
         esac
         if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then

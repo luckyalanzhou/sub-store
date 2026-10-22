@@ -30,20 +30,20 @@ sed \
     -e "s|/etc/config/sub-store|$TEST_DIR/config|g" \
     -e "s|/lib/functions.sh|$TEST_DIR/openwrt-functions.sh|g" \
     -e "s|/usr/lib/sub-store/cron.sh|$ROOT/run/payload/root/usr/lib/sub-store/cron.sh|g" \
-    -e "s|temp_file=\"[\$][(]mktemp |temp_file=\"\$($BIN/mktemp |" \
-    -e "s|    tar -czf |    $BIN/tar -czf |" \
-    -e "s|        mv -f |        $BIN/mv -f |" \
+    -e "s|/usr/lib/sub-store/registry-image.sh|$ROOT/run/payload/root/usr/lib/sub-store/registry-image.sh|g" \
+    -e "s|/usr/lib/sub-store/export-data|$TEST_DIR/export-data|g" \
     "$ROOT/run/payload/root/usr/bin/sub-storectl" > "$TEST_DIR/sub-storectl"
-grep -Fq "temp_file=\"\$($BIN/mktemp " "$TEST_DIR/sub-storectl" || {
-    echo 'Could not inject the temporary-file permission mock.' >&2
+cp "$ROOT/run/payload/root/usr/lib/sub-store/export-data" "$TEST_DIR/export-data"
+grep -Fq "exec $TEST_DIR/export-data" "$TEST_DIR/sub-storectl" || {
+    echo 'sub-storectl did not dispatch exports through the export module.' >&2
     exit 1
 }
-grep -Fq "$BIN/tar -czf " "$TEST_DIR/sub-storectl" || {
-    echo 'Could not inject the archive creation mock.' >&2
+grep -Fq 'tar -czf "$temp_file"' "$TEST_DIR/export-data" || {
+    echo 'The export module does not create the expected archive.' >&2
     exit 1
 }
-grep -Fq "$BIN/mv -f " "$TEST_DIR/sub-storectl" || {
-    echo 'Could not inject the atomic replacement mock.' >&2
+grep -Fq 'mv -f "$temp_file" "$resolved_target"' "$TEST_DIR/export-data" || {
+    echo 'The export module does not atomically replace the destination.' >&2
     exit 1
 }
 
@@ -115,7 +115,7 @@ fi
 exec "$REAL_MV" "$@"
 EOF
 
-chmod +x "$BIN/docker" "$BIN/mktemp" "$BIN/tar" "$BIN/mv"
+chmod +x "$BIN/docker" "$BIN/mktemp" "$BIN/tar" "$BIN/mv" "$TEST_DIR/export-data"
 
 run_export() {
     export PATH="$BIN:$PATH"

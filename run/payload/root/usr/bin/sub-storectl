@@ -11,6 +11,7 @@ CONFIG=/etc/config/sub-store
 IPKG_INSTROOT="${IPKG_INSTROOT:-}"
 . /lib/functions.sh
 . /usr/lib/sub-store/cron.sh
+. /usr/lib/sub-store/registry-image.sh
 config_load sub-store
 config_get FRONTEND_PORT main frontend_port 3001
 config_get BACKEND_PORT main backend_port 3000
@@ -24,6 +25,7 @@ DATA_VOLUME=sub-store-data
 HEALTHCHECK=/usr/lib/sub-store/healthcheck.js
 APP_VERSION_CHECK=/usr/lib/sub-store/app-version.js
 RUN_IMAGE_REF="$IMAGE_REF"
+INSTALL_TRANSACTION_DIR=/etc/sub-store/install-transaction
 
 fail() {
     echo "sub-storectl: $*" >&2
@@ -260,66 +262,11 @@ new_api_path() {
         | cut -c1-48
 }
 
-image_json_value() {
-    printf '%s' "$1" | jsonfilter -e "$2" 2>/dev/null
-}
-
-registry_manifest() {
-    curl --fail --silent --show-error --proto '=https' --connect-timeout 10 --max-time 20 \
-        -H "Authorization: Bearer $registry_token" \
-        -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-        "https://registry-1.docker.io/v2/xream/sub-store/manifests/$1"
-}
-
-remote_image_info() {
-    command -v curl >/dev/null 2>&1 && command -v jsonfilter >/dev/null 2>&1 || return 1
-    image_metadata="$(docker image inspect -f '{{json .}}' "$1")" || return 1
-    image_arch="$(image_json_value "$image_metadata" '@.Architecture')" || return 1
-    image_os="$(image_json_value "$image_metadata" '@.Os')" || return 1
-    image_variant="$(image_json_value "$image_metadata" '@.Variant' || true)"
-    [ -n "$image_arch" ] && [ -n "$image_os" ] || return 1
-    [ "$image_arch" != arm64 ] || image_variant="${image_variant:-v8}"
-
-    token_response="$(curl --fail --silent --show-error --proto '=https' --connect-timeout 10 --max-time 20 \
-        'https://auth.docker.io/token?service=registry.docker.io&scope=repository:xream/sub-store:pull')" || return 1
-    registry_token="$(image_json_value "$token_response" '@.token')" || return 1
-    case "$registry_token" in ''|*[!A-Za-z0-9._=-]*) return 1 ;; esac
-    remote_manifest="$(registry_manifest latest)" || return 1
-    remote_ref=xream/sub-store:latest
-    remote_config="$(image_json_value "$remote_manifest" '@.config.digest' || true)"
-    if [ -z "$remote_config" ]; then
-        # Select this image's platform, ignoring other architectures and attestations.
-        manifest_index=0
-        matching_manifests=0
-        while [ "$manifest_index" -lt 128 ]; do
-            descriptor="$(image_json_value "$remote_manifest" "@.manifests[$manifest_index]" || true)"
-            [ -n "$descriptor" ] || break
-            descriptor_arch="$(image_json_value "$descriptor" '@.platform.architecture' || true)"
-            descriptor_os="$(image_json_value "$descriptor" '@.platform.os' || true)"
-            descriptor_variant="$(image_json_value "$descriptor" '@.platform.variant' || true)"
-            [ "$descriptor_arch" != arm64 ] || descriptor_variant="${descriptor_variant:-v8}"
-            if [ "$descriptor_arch" = "$image_arch" ] && [ "$descriptor_os" = "$image_os" ] &&
-                { [ -z "$image_variant" ] || [ "$descriptor_variant" = "$image_variant" ]; }; then
-                selected_digest="$(image_json_value "$descriptor" '@.digest')" || return 1
-                matching_manifests=$((matching_manifests + 1))
-            fi
-            manifest_index=$((manifest_index + 1))
-        done
-        [ "$manifest_index" -lt 128 ] && [ "$matching_manifests" -eq 1 ] || return 1
-        printf '%s\n' "$selected_digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || return 1
-        remote_ref="xream/sub-store@$selected_digest"
-        remote_manifest="$(registry_manifest "$selected_digest")" || return 1
-        remote_config="$(image_json_value "$remote_manifest" '@.config.digest')" || return 1
-    fi
-    printf '%s\n' "$remote_config" | grep -Eq '^sha256:[0-9a-f]{64}$' || return 1
-    printf '%s %s\n' "$remote_config" "$remote_ref"
-}
-
 update_image() {
     daemon_ready
     docker inspect sub-store >/dev/null 2>&1 || {
-        echo '容器尚未创建，请先启动服务。'
-        return 0
+        echo '容器尚未创建，请先启动服务。' >&2
+        return 1
     }
     assert_sub_store_container sub-store
     checked_image_id="$(docker inspect -f '{{.Image}}' sub-store)" || return 1
@@ -332,11 +279,95 @@ update_image() {
     checked_config="${checked_remote%% *}"
     checked_ref="${checked_remote#* }"
     if [ "$checked_image_id" = "$checked_config" ]; then
+        running_state="$(docker inspect -f '{{.State.Running}}' sub-store 2>/dev/null)" || return 1
+        [ "$running_state" = "true" ] || {
+            echo 'Current container is stopped; start it before treating the image as up to date.' >&2
+            return 1
+        }
         echo '镜像已是最新，无需拉取或重建。'
         return 0
     fi
     echo '发现新镜像，开始拉取并更新容器...'
     replace_container update "$checked_ref" "$checked_config"
+}
+
+install_deploy() {
+    deploy_mode="${1:-restart}"
+    deploy_version="${2:-}"
+    case "$deploy_mode" in
+        update|restart) ;;
+        *) fail "usage: sub-storectl install-deploy {update|restart}" ;;
+    esac
+    case "$deploy_version" in
+        dev) ;;
+        *) printf '%s\n' "$deploy_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
+        fail "installer package version is invalid"
+            ;;
+    esac
+
+    HAD_OLD_CONTAINER=0
+    BACKUP_NAME=""
+    INSTALL_DEPLOYMENT=1
+    if [ "$deploy_mode" = "update" ]; then
+        update_image || return 1
+    else
+        replace_container || return 1
+    fi
+
+    deploy_status="$(docker inspect -f '{{.State.Status}}' sub-store 2>/dev/null || true)"
+    if [ "$deploy_status" != "running" ]; then
+        if [ "$HAD_OLD_CONTAINER" = "1" ] && [ -n "$BACKUP_NAME" ] &&
+            docker inspect "$BACKUP_NAME" >/dev/null 2>&1; then
+            rollback_replacement
+        fi
+        fail "installer deployment did not reach running state (status: ${deploy_status:-unknown}); previous container restored when available"
+    fi
+
+    if ! commit_installer_metadata "$deploy_version"; then
+        if [ "$HAD_OLD_CONTAINER" = "1" ] && [ -n "$BACKUP_NAME" ] &&
+            docker inspect "$BACKUP_NAME" >/dev/null 2>&1; then
+            rollback_replacement
+        fi
+        fail "installer metadata could not be committed; previous container restored when available"
+    fi
+
+    if [ "$HAD_OLD_CONTAINER" = "1" ] && [ -n "$BACKUP_NAME" ] &&
+        docker inspect "$BACKUP_NAME" >/dev/null 2>&1; then
+        if ! docker rm "$BACKUP_NAME" >/dev/null 2>&1; then
+            echo "WARNING: Installer deployment is running, but rollback container $BACKUP_NAME could not be removed." >&2
+        elif [ "$deploy_mode" = "update" ]; then
+            cleanup_replaced_image
+        fi
+    fi
+    INSTALL_DEPLOYMENT=0
+}
+
+commit_installer_metadata() {
+    package_version="$1"
+    touch /etc/sub-store/installed &&
+        chmod 600 /etc/sub-store/installed || return 1
+    uci -q delete sub-store.main.data_dir >/dev/null 2>&1 || true
+    uci -q delete sub-store.main.port >/dev/null 2>&1 || true
+    uci commit sub-store && chmod 600 /etc/config/sub-store || return 1
+    printf '%s\n' "$package_version" >/etc/sub-store/version &&
+        chmod 644 /etc/sub-store/version || return 1
+    if [ -d "$INSTALL_TRANSACTION_DIR" ] && [ ! -L "$INSTALL_TRANSACTION_DIR" ]; then
+        printf '%s\n' committed > "$INSTALL_TRANSACTION_DIR/state.tmp.$$" &&
+            chmod 600 "$INSTALL_TRANSACTION_DIR/state.tmp.$$" &&
+            mv -f "$INSTALL_TRANSACTION_DIR/state.tmp.$$" "$INSTALL_TRANSACTION_DIR/state" || return 1
+    fi
+}
+
+record_install_container_backup() {
+    [ -d "$INSTALL_TRANSACTION_DIR" ] && [ ! -L "$INSTALL_TRANSACTION_DIR" ] || return 0
+    [ "$(cat "$INSTALL_TRANSACTION_DIR/state" 2>/dev/null || true)" = prepared ] || return 0
+    printf '%s\n' "$BACKUP_NAME" > "$INSTALL_TRANSACTION_DIR/container-name.tmp.$$"
+    printf '%s\n' "$PREVIOUS_CONTAINER_ID" > "$INSTALL_TRANSACTION_DIR/container-id.tmp.$$"
+    printf '%s\n' "$OLD_WAS_RUNNING" > "$INSTALL_TRANSACTION_DIR/container-was-running.tmp.$$"
+    chmod 600 "$INSTALL_TRANSACTION_DIR"/container-*.tmp.$$ || return 1
+    mv -f "$INSTALL_TRANSACTION_DIR/container-name.tmp.$$" "$INSTALL_TRANSACTION_DIR/container-name" &&
+        mv -f "$INSTALL_TRANSACTION_DIR/container-id.tmp.$$" "$INSTALL_TRANSACTION_DIR/container-id" &&
+        mv -f "$INSTALL_TRANSACTION_DIR/container-was-running.tmp.$$" "$INSTALL_TRANSACTION_DIR/container-was-running"
 }
 
 check_port_conflicts() {
@@ -389,8 +420,19 @@ check_storage_capacity() {
 run_container() {
     backend_publish="$BACKEND_PORT:3000"
     [ "$BACKEND_LAN_ACCESS" = "1" ] || backend_publish="127.0.0.1:$BACKEND_PORT:3000"
+    install_transaction_token=""
+    if [ -d "$INSTALL_TRANSACTION_DIR" ] && [ ! -L "$INSTALL_TRANSACTION_DIR" ] &&
+        [ "$(cat "$INSTALL_TRANSACTION_DIR/state" 2>/dev/null || true)" = prepared ] &&
+        [ -f "$INSTALL_TRANSACTION_DIR/new-container-token" ] &&
+        [ ! -L "$INSTALL_TRANSACTION_DIR/new-container-token" ]; then
+        install_transaction_token="$(cat "$INSTALL_TRANSACTION_DIR/new-container-token")"
+        case "$install_transaction_token" in
+            ''|*[!A-Za-z0-9_-]*) fail "installer transaction token is invalid" ;;
+        esac
+    fi
     CONTAINER_ID="$(docker run -d \
         --name sub-store \
+        --label "io.sub-store.install-transaction=$install_transaction_token" \
         --restart unless-stopped \
         --security-opt no-new-privileges:true \
         -p "$FRONTEND_PORT:3001" \
@@ -533,7 +575,7 @@ cleanup_replaced_image() {
         return 0
     }
     # Preserve images also named by the user or another repository.
-    if printf '%s\n' "$cleanup_refs" | grep -Ev '^(|(docker\.io/)?xream/sub-store(:[^[:space:]]+|@sha256:[0-9a-f]{64}))$' >/dev/null; then
+    if printf '%s\n' "$cleanup_refs" | grep -Ev '^(|(docker\.io/)?xream/sub-store(:latest|@sha256:[0-9a-f]{64}))$' >/dev/null; then
         echo "Old image has other repository references; keeping it."
         return 0
     fi
@@ -601,10 +643,12 @@ replace_container() {
     PREVIOUS_BACKEND_PORT=""
     PREVIOUS_SYNC_CRON=""
     PREVIOUS_IMAGE_ID=""
+    PREVIOUS_CONTAINER_ID=""
 
     if docker inspect sub-store >/dev/null 2>&1; then
         HAD_OLD_CONTAINER=1
         assert_sub_store_container sub-store
+        PREVIOUS_CONTAINER_ID="$(docker inspect -f '{{.Id}}' sub-store 2>/dev/null || true)"
         PREVIOUS_IMAGE_ID="$(docker inspect -f '{{.Image}}' sub-store 2>/dev/null || true)"
         PREVIOUS_MOUNT_TYPE="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/opt/app/data"}}{{.Type}}{{end}}{{end}}' sub-store 2>/dev/null || true)"
         PREVIOUS_MOUNT_NAME="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/opt/app/data"}}{{.Name}}{{end}}{{end}}' sub-store 2>/dev/null || true)"
@@ -720,6 +764,14 @@ replace_container() {
             BACKUP_NAME="sub-store-rollback-$$-$suffix"
         done
 
+        if [ -d "$INSTALL_TRANSACTION_DIR" ] &&
+            [ "$(cat "$INSTALL_TRANSACTION_DIR/state" 2>/dev/null || true)" = prepared ]; then
+            [ -n "$PREVIOUS_CONTAINER_ID" ] && record_install_container_backup || {
+                restore_previous_settings
+                fail "could not save the installer recovery record; the current container was left unchanged"
+            }
+        fi
+
         if [ "$OLD_WAS_RUNNING" = "1" ]; then
             if ! docker stop sub-store >/dev/null; then
                 restore_previous_settings
@@ -750,11 +802,28 @@ replace_container() {
     fi
 
     if run_container; then
+        if [ "$HAD_OLD_CONTAINER" = "0" ] && [ -d "$INSTALL_TRANSACTION_DIR" ] &&
+            [ "$(cat "$INSTALL_TRANSACTION_DIR/state" 2>/dev/null || true)" = prepared ]; then
+            new_container_id="$(docker inspect -f '{{.Id}}' sub-store 2>/dev/null || true)"
+            [ -n "$new_container_id" ] || {
+                rollback_replacement
+                fail "new container started but its installer recovery identity could not be saved"
+            }
+            printf '%s\n' "$new_container_id" > "$INSTALL_TRANSACTION_DIR/new-container-id.tmp.$$"
+            chmod 600 "$INSTALL_TRANSACTION_DIR/new-container-id.tmp.$$" || {
+                rollback_replacement
+                fail "could not secure the new container installer recovery identity"
+            }
+            mv -f "$INSTALL_TRANSACTION_DIR/new-container-id.tmp.$$" "$INSTALL_TRANSACTION_DIR/new-container-id" || {
+                rollback_replacement
+                fail "could not save the new container installer recovery identity"
+            }
+        fi
         if ! persist_running_image_ref; then
             rollback_replacement
             fail "new container was healthy, but its verified image digest could not be saved; the previous container was restored when available"
         fi
-        if [ "$HAD_OLD_CONTAINER" = "1" ]; then
+        if [ "$HAD_OLD_CONTAINER" = "1" ] && [ "${INSTALL_DEPLOYMENT:-0}" != "1" ]; then
             if ! docker rm "$BACKUP_NAME" >/dev/null 2>&1; then
                 echo "WARNING: New container is running, but the stopped rollback container $BACKUP_NAME could not be removed." >&2
             elif [ "${1:-}" = "update" ]; then
@@ -823,73 +892,10 @@ show_app_version() {
     '
 }
 
-export_data() (
-    target="${1:-}"
-    [ -n "$target" ] || fail "usage: sub-storectl export-data /absolute/path/sub-store-data.tar.gz"
-    case "$target" in /*) ;; *) fail "export destination must be an absolute path" ;; esac
-    daemon_ready
-    ensure_data_volume
-    target_dir="${target%/*}"
-    [ -n "$target_dir" ] || target_dir=/
-    [ -d "$target_dir" ] || fail "export destination directory does not exist: $target_dir"
-    [ ! -d "$target" ] || fail "export destination must be a file, not a directory"
-    case "$target" in "$VOLUME_PATH"|"$VOLUME_PATH"/*) fail "export destination cannot be inside the data volume" ;; esac
-    resolved_volume_path="$(cd -P "$VOLUME_PATH" 2>/dev/null && pwd -P)" || fail "could not resolve the data volume path"
-    resolved_target_dir="$(cd -P "$target_dir" 2>/dev/null && pwd -P)" || fail "could not resolve the export destination directory"
-    case "$resolved_target_dir" in
-        "$resolved_volume_path"|"$resolved_volume_path"/*) fail "export destination cannot be inside the data volume" ;;
-    esac
-    if [ "$resolved_target_dir" = "/" ]; then
-        resolved_target="/${target##*/}"
-    else
-        resolved_target="$resolved_target_dir/${target##*/}"
-    fi
-
-    umask 077
-    temp_file="$(mktemp "$resolved_target_dir/.sub-store-export.XXXXXX")" || fail "could not create a private temporary export file"
-    chmod 600 "$temp_file" || {
-        rm -f "$temp_file"
-        fail "could not secure the temporary export file"
-    }
-    paused=0
-    cleanup_export() {
-        if [ "$paused" = "1" ]; then
-            paused_state="$(docker inspect -f '{{.State.Paused}}' sub-store 2>/dev/null || true)"
-            if [ "$paused_state" = "false" ]; then
-                paused=0
-            elif docker unpause sub-store >/dev/null; then
-                paused=0
-            else
-                echo "WARNING: Export cleanup could not unpause sub-store. Start it manually." >&2
-            fi
-        fi
-        [ -z "$temp_file" ] || rm -f "$temp_file"
-    }
-    trap cleanup_export EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    if docker inspect -f '{{.State.Running}}' sub-store 2>/dev/null | grep -qx true; then
-        paused=1
-        docker pause sub-store >/dev/null || fail "could not pause sub-store for a consistent export"
-    fi
-    result=0
-    tar -czf "$temp_file" -C "$VOLUME_PATH" . || result=$?
-    if [ "$result" -eq 0 ]; then
-        chmod 600 "$temp_file" || result=$?
-    fi
-    if [ "$result" -eq 0 ] && [ "$paused" = "1" ]; then
-        docker unpause sub-store >/dev/null || result=$?
-        [ "$result" -ne 0 ] || paused=0
-    fi
-    if [ "$result" -eq 0 ]; then
-        mv -f "$temp_file" "$resolved_target" || result=$?
-    fi
-    [ "$result" -eq 0 ] || fail "could not export sub-store data"
-    temp_file=""
-    echo "Exported sub-store data to $target"
-    command -v sha256sum >/dev/null 2>&1 && sha256sum "$resolved_target" || true
-)
+export_data() {
+    [ "$#" -eq 1 ] || fail "usage: sub-storectl export-data /absolute/path/sub-store-data.tar.gz"
+    exec /usr/lib/sub-store/export-data "$1"
+}
 
 uninstall_plugin() {
     delete_data="${1:-}"
@@ -910,8 +916,11 @@ uninstall_plugin() {
     else
         echo "Preserved Docker volume $DATA_VOLUME."
     fi
-    rm -f /etc/init.d/sub-store /usr/lib/sub-store/status /usr/lib/sub-store/job.sh \
+    rm -f /etc/init.d/sub-store /etc/init.d/sub-store-install-recovery \
+        /etc/rc.d/S99sub-store-install-recovery /usr/lib/sub-store/install-recovery \
+        /usr/lib/sub-store/status /usr/lib/sub-store/job.sh \
         /usr/lib/sub-store/healthcheck.js /usr/lib/sub-store/app-version.js /usr/lib/sub-store/cron.sh /usr/lib/sub-store/permissions.sh \
+        /usr/lib/sub-store/export-data /usr/lib/sub-store/registry-image.sh \
         /usr/share/rpcd/acl.d/luci-app-sub-store.json /usr/share/luci/menu.d/luci-app-sub-store.json \
         /www/luci-static/resources/view/sub-store/manage.js /etc/config/sub-store
     rm -rf /www/luci-static/resources/view/sub-store /etc/sub-store /tmp/sub-store-operation
@@ -992,6 +1001,9 @@ case "$ACTION" in
     update)
         update_image
         ;;
+    install-deploy)
+        install_deploy "${2:-restart}" "${3:-}"
+        ;;
     update-all)
         image_result=0
         plugin_result=0
@@ -1049,6 +1061,6 @@ case "$ACTION" in
         uninstall_plugin "${2:-}"
         ;;
     *)
-        fail "usage: sub-storectl {status|health|app-version|url|api-url|storage|logs|check-plugin-update|install-plugin-update|render|import-legacy|start|stop|restart|pull|update|update-all|rotate-key|remove-container|export-data|uninstall}"
+        fail "usage: sub-storectl {status|health|app-version|url|api-url|storage|logs|check-plugin-update|install-plugin-update|render|import-legacy|start|stop|restart|pull|update|install-deploy|update-all|rotate-key|remove-container|export-data|uninstall}"
         ;;
 esac

@@ -18,6 +18,16 @@ awk '
 say() { :; }
 refresh_luci_cache() { :; }
 
+# Full installs must snapshot recovery helpers before replacing them, so a
+# failed install restores the previous startup recovery behavior.
+recovery_hook_line="$(grep -n '^[[:space:]]*install_recovery_hook$' "$ROOT/run/payload/install.sh" | tail -n 1 | cut -d: -f1)"
+rollback_snapshot_line="$(grep -n '^[[:space:]]*prepare_plugin_rollback$' "$ROOT/run/payload/install.sh" | tail -n 1 | cut -d: -f1)"
+[ -n "$recovery_hook_line" ] && [ -n "$rollback_snapshot_line" ] &&
+    [ "$rollback_snapshot_line" -lt "$recovery_hook_line" ] || {
+        echo 'Installer replaced recovery helpers before saving their rollback state.' >&2
+        exit 1
+    }
+
 PLUGIN_TARGET_PREFIX="$TEST_DIR/root"
 PLUGIN_BACKUP_DIR="$TEST_DIR/backup"
 PLUGIN_UPDATE_ACTIVE=1
@@ -67,6 +77,29 @@ rollback_plugin_update
 [ "$(cat "$PLUGIN_TARGET_PREFIX/etc/config/sub-store")" = old-config ]
 [ "$(cat "$PLUGIN_TARGET_PREFIX/etc/sub-store/version")" = old-version ]
 [ ! -e "$PLUGIN_TARGET_PREFIX/etc/sub-store/installed" ]
+
+PACKAGE_DIR="$TEST_DIR/recovery-package"
+PLUGIN_TARGET_PREFIX="$TEST_DIR/recovery-root"
+PLUGIN_BACKUP_DIR=""
+PLUGIN_UPDATE_ACTIVE=0
+FULL_INSTALL_ACTIVE=1
+INSTALL_TRANSACTION_DIR="$TEST_DIR/recovery-transaction"
+mkdir -p "$PACKAGE_DIR/root/usr/lib/sub-store" "$PACKAGE_DIR/root/etc/init.d" \
+    "$PLUGIN_TARGET_PREFIX/usr/lib/sub-store" "$PLUGIN_TARGET_PREFIX/etc/init.d"
+printf '%s\n' new-recovery > "$PACKAGE_DIR/root/usr/lib/sub-store/install-recovery"
+printf '%s\n' new-registry-module > "$PACKAGE_DIR/root/usr/lib/sub-store/registry-image.sh"
+printf '%s\n' new-init-hook > "$PACKAGE_DIR/root/etc/init.d/sub-store-install-recovery"
+printf '%s\n' old-recovery > "$PLUGIN_TARGET_PREFIX/usr/lib/sub-store/install-recovery"
+printf '%s\n' old-registry-module > "$PLUGIN_TARGET_PREFIX/usr/lib/sub-store/registry-image.sh"
+printf '%s\n' old-init-hook > "$PLUGIN_TARGET_PREFIX/etc/init.d/sub-store-install-recovery"
+prepare_plugin_rollback
+cp -R "$PACKAGE_DIR/root/." "$PLUGIN_TARGET_PREFIX/"
+rollback_plugin_update
+[ "$(cat "$PLUGIN_TARGET_PREFIX/usr/lib/sub-store/install-recovery")" = old-recovery ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/usr/lib/sub-store/registry-image.sh")" = old-registry-module ]
+[ "$(cat "$PLUGIN_TARGET_PREFIX/etc/init.d/sub-store-install-recovery")" = old-init-hook ]
+[ ! -e "$INSTALL_TRANSACTION_DIR" ]
+FULL_INSTALL_ACTIVE=0
 
 PACKAGE_DIR="$TEST_DIR/versioned-package"
 PLUGIN_TARGET_PREFIX="$TEST_DIR/versioned-root"
