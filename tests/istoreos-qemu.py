@@ -302,7 +302,7 @@ def main() -> None:
                 key_path,
                 "set -e; test \"$(/usr/bin/sub-storectl status)\" = running; "
                 "test \"$(cat /etc/sub-store/version)\" = " + INITIAL_VERSION + "; "
-                "docker exec -i sub-store node --input-type=commonjs - < /usr/lib/sub-store/healthcheck.js; "
+                "docker exec -i sub-store node --input-type=commonjs - < /usr/lib/sub-store/healthcheck.js >/dev/null; "
                 "container=$(docker inspect -f '{{.Id}}' sub-store); "
                 "volume=$(docker volume inspect -f '{{.Mountpoint}}' sub-store-data); "
                 "printf 'ci-data-marker\\n' > \"$volume/ci-marker\"; "
@@ -329,7 +329,7 @@ def main() -> None:
                 key_path,
                 "set -e; test \"$(/usr/bin/sub-storectl status)\" = running; "
                 "test \"$(cat /etc/sub-store/version)\" = " + PLUGIN_UPDATE_VERSION + "; "
-                "docker exec -i sub-store node --input-type=commonjs - < /usr/lib/sub-store/healthcheck.js; "
+                "docker exec -i sub-store node --input-type=commonjs - < /usr/lib/sub-store/healthcheck.js >/dev/null; "
                 "container=$(docker inspect -f '{{.Id}}' sub-store); "
                 "config=$(sha256sum /etc/config/sub-store | cut -d' ' -f1); "
                 "volume=$(docker volume inspect -f '{{.Mountpoint}}' sub-store-data); "
@@ -362,7 +362,7 @@ def main() -> None:
                 key_path,
                 "set -e; test \"$(/usr/bin/sub-storectl status)\" = running; "
                 "test \"$(cat /etc/sub-store/version)\" = " + FULL_UPGRADE_VERSION + "; "
-                "docker exec -i sub-store node --input-type=commonjs - < /usr/lib/sub-store/healthcheck.js; "
+                "docker exec -i sub-store node --input-type=commonjs - < /usr/lib/sub-store/healthcheck.js >/dev/null; "
                 "config=$(sha256sum /etc/config/sub-store | cut -d' ' -f1); "
                 "volume=$(docker volume inspect -f '{{.Mountpoint}}' sub-store-data); "
                 "test \"$(cat \"$volume/ci-marker\")\" = ci-data-marker; "
