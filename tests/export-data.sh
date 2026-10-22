@@ -57,9 +57,7 @@ if [ "${MOCK_EXPORT_RACE:-0}" = 1 ]; then
     ln -s "$MOCK_VOLUME_PATH" "$MOCK_EXPORT_LINK"
 fi
 created_file="$("$REAL_MKTEMP" "$@")" || exit
-case "$*" in
-    *sub-store-export.*) stat -c '%a' "$created_file" > "$TAR_MODE_AT_CREATE_CAPTURE" ;;
-esac
+stat -c '%a' "$created_file" > "$TAR_MODE_AT_CREATE_CAPTURE"
 printf '%s\n' "$created_file"
 EOF
 
