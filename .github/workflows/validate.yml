@@ -62,14 +62,23 @@ jobs:
           exec busybox awk "$@"
           EOF
           chmod +x "$awk_bin/awk"
+          echo 'Running BusyBox regression: cron-validation'
           PATH="$awk_bin:$PATH" busybox ash tests/cron-validation.sh
+          echo 'Running BusyBox regression: docker-volume-storage'
           busybox ash tests/docker-volume-storage.sh
+          echo 'Running BusyBox regression: image-update'
           busybox ash tests/image-update.sh
+          echo 'Running BusyBox regression: operation-feedback'
           BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
+          echo 'Running BusyBox regression: install-permissions'
           busybox ash tests/install-permissions.sh
+          echo 'Running BusyBox regression: service-init'
           busybox ash tests/service-init.sh
+          echo 'Running BusyBox regression: package-manager'
           busybox ash tests/package-manager.sh
+          echo 'Running BusyBox regression: plugin-install-rollback'
           busybox ash tests/plugin-install-rollback.sh
+          echo 'Running BusyBox regression: plugin-update'
           busybox ash tests/plugin-update.sh
 
       - name: Check LuCI and health behavior
