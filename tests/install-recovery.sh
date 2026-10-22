@@ -2,6 +2,7 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+RECOVERY="$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 grep -Fq '/usr/lib/sub-store/install-recovery' \
@@ -69,7 +70,7 @@ chmod +x "$TMP/bin/docker"
 rm -rf "$TX"
 mkdir -p "$TX"
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" SUB_STORE_INSTALL_ROOT="$TMP" \
-    "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    sh "$RECOVERY"
 [ ! -e "$TX" ]
 
 mkdir -p "$TX/plugin/files/etc/config"
@@ -83,7 +84,7 @@ printf '1\n' > "$TX/container-was-running"
 touch "$TMP/containers/sub-store" "$TMP/containers/sub-store-rollback-123"
 
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" \
-    SUB_STORE_INSTALL_ROOT="$TMP" "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    SUB_STORE_INSTALL_ROOT="$TMP" sh "$RECOVERY"
 
 [ "$(cat "$TMP/etc/config/sub-store")" = 'old config' ]
 [ -f "$TMP/containers/sub-store" ]
@@ -101,7 +102,7 @@ printf 'first-install-token\n' > "$TX/new-container-token"
 touch "$TMP/containers/sub-store"
 printf 'first-install-token\n' > "$TMP/containers/sub-store.transaction-token"
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" SUB_STORE_INSTALL_ROOT="$TMP" \
-    "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    sh "$RECOVERY"
 [ ! -e "$TMP/containers/sub-store" ]
 [ ! -e "$TX" ]
 rm -f "$TMP/containers/sub-store.transaction-token"
@@ -124,7 +125,7 @@ exit 0
 EOF
 chmod +x "$TMP/bin/docker-unavailable" "$TMP/bin/sleep"
 if PATH="$TMP/bin:$PATH" SUB_STORE_DOCKER="$TMP/bin/docker-unavailable" \
-    SUB_STORE_INSTALL_ROOT="$TMP" "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery" \
+    SUB_STORE_INSTALL_ROOT="$TMP" sh "$RECOVERY" \
     > "$TMP/docker-unavailable.log" 2>&1; then
     echo 'Recovery discarded a first-install journal while Docker was unavailable.' >&2
     exit 1
@@ -142,12 +143,12 @@ printf 'new config\n' > "$TMP/etc/config/sub-store"
 printf '%s\n' "$$" > "$TMP/etc/sub-store-operation/lock/pid"
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" SUB_STORE_INSTALL_ROOT="$TMP" \
     SUB_STORE_OPERATION_STATE="$TMP/etc/sub-store-operation" \
-    "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    sh "$RECOVERY"
 [ -d "$TX" ]
 [ "$(cat "$TMP/etc/config/sub-store")" = 'new config' ]
 rm -rf "$TMP/etc/sub-store-operation"
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" SUB_STORE_INSTALL_ROOT="$TMP" \
-    SUB_STORE_INSTALL_RECOVERY_FORCE=1 "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    SUB_STORE_INSTALL_RECOVERY_FORCE=1 sh "$RECOVERY"
 [ ! -e "$TX" ]
 [ "$(cat "$TMP/etc/config/sub-store")" = 'old config' ]
 
@@ -159,7 +160,7 @@ printf 'present etc/config/sub-store\n' > "$TX/plugin/states"
 printf 'partial backup\n' > "$TX/plugin/files/etc/config/sub-store"
 printf 'live config\n' > "$TMP/etc/config/sub-store"
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" SUB_STORE_INSTALL_ROOT="$TMP" \
-    "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    sh "$RECOVERY"
 [ "$(cat "$TMP/etc/config/sub-store")" = 'live config' ]
 [ ! -e "$TX" ]
 
@@ -170,7 +171,7 @@ printf 'prepared\n' > "$TX/state"
 printf 'new-container-id\n' > "$TX/new-container-id"
 touch "$TMP/containers/sub-store"
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" SUB_STORE_INSTALL_ROOT="$TMP" \
-    "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    sh "$RECOVERY"
 [ ! -e "$TMP/containers/sub-store" ]
 [ "$(cat "$TMP/data/preserved")" = 'user data' ]
 [ ! -e "$TX" ]
@@ -184,7 +185,7 @@ printf 'old-container-id\n' > "$TX/container-id"
 printf '1\n' > "$TX/container-was-running"
 touch "$TMP/containers/sub-store" "$TMP/containers/old-restored"
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" SUB_STORE_INSTALL_ROOT="$TMP" \
-    "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    sh "$RECOVERY"
 [ -f "$TMP/containers/sub-store.started" ]
 [ ! -e "$TX" ]
 rm -f "$TMP/containers/old-restored" "$TMP/containers/sub-store.started"
@@ -198,7 +199,7 @@ printf 'committed config\n' > "$TMP/etc/config/sub-store"
 printf 'sub-store-rollback-456\n' > "$TX/container-name"
 touch "$TMP/containers/sub-store-rollback-456"
 PATH="$TMP/bin:$PATH" DOCKER_STATE="$TMP/containers" SUB_STORE_INSTALL_ROOT="$TMP" \
-    "$ROOT/run/payload/root/usr/lib/sub-store/install-recovery"
+    sh "$RECOVERY"
 [ "$(cat "$TMP/etc/config/sub-store")" = 'committed config' ]
 [ ! -e "$TMP/containers/sub-store-rollback-456" ]
 [ ! -e "$TX" ]
