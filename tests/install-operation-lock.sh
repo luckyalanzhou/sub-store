@@ -44,6 +44,8 @@ acquire_install_operation_lock
 release_install_operation_lock
 [ ! -e "$TMP/state/lock" ]
 
+echo 'Installer operation lock: helper lifecycle checks passed.'
+
 # Installer exit cleanup must release the shared lock on an unsuccessful exit.
 if (
     . "$TMP/install-lock.sh"
@@ -66,6 +68,8 @@ release_install_operation_lock
 rm -f "$TMP/state/lock/pid"
 rmdir "$TMP/state/lock"
 
+echo 'Installer operation lock: plugin-only bypass passed.'
+
 # Verify the actual installer wires the shared guard before full-install work,
 # while the plugin-only branch remains covered by the helper's explicit bypass.
 grep -Fq '. "$PACKAGE_DIR/lib/install-lock.sh"' "$INSTALLER"
@@ -73,6 +77,8 @@ acquire_line="$(grep -nF 'acquire_install_operation_lock || fail' "$INSTALLER" |
 plugin_line="$(grep -nF 'if [ "$PLUGIN_ONLY" = "1" ]; then' "$INSTALLER" | tail -n 1 | cut -d: -f1)"
 [ -n "$acquire_line" ] && [ -n "$plugin_line" ] && [ "$acquire_line" -lt "$plugin_line" ]
 grep -Fq 'release_install_operation_lock || true' "$INSTALLER"
+
+echo 'Installer operation lock: installer wiring checks passed.'
 
 # Exercise the actual installer entry without touching host system paths. The
 # active case must stop before dependency setup; the idle case reaches a
@@ -112,6 +118,8 @@ fi
 [ "$(cat "$TMP/entry-state/lock/pid")" = "$$" ]
 [ ! -e "$TMP/opkg.log" ]
 grep -q 'Another sub-store operation is running' "$TMP/entry-active-output"
+
+echo 'Installer operation lock: active-operation rejection passed.'
 
 rm -f "$TMP/entry-state/lock/pid"
 rmdir "$TMP/entry-state/lock"
