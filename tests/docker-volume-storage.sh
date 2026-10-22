@@ -35,7 +35,21 @@ MOCK_LOG_DRIVER=json-file
 MOCK_LOG_PATH="$TEST_DIR/sub-store-runtime.log"
 MOCK_REPO_DIGEST=""
 TAR_MODE_CAPTURE="$TEST_DIR/tar-mode"
+TAR_MODE_AT_CREATE_CAPTURE="$TEST_DIR/tar-mode-at-create"
+MOCK_EXPORT_TARGET=""
+MOCK_EXPORT_ATOMIC=0
+MOCK_PAUSED_STATE="$TEST_DIR/container-paused"
+MOCK_PAUSE_FAIL_AFTER=0
 MOCK_TAR_FAIL=0
+printf '%s\n' false > "$MOCK_PAUSED_STATE"
+
+mktemp() {
+    created_file="$(command mktemp "$@")" || return
+    case "$*" in
+        *sub-store-export.*) stat -c '%a' "$created_file" > "$TAR_MODE_AT_CREATE_CAPTURE" ;;
+    esac
+    printf '%s\n' "$created_file"
+}
 
 uci() {
     case "$*" in
@@ -78,6 +92,7 @@ docker() {
                 case "$3" in
                     *State.Status*) [ "$MOCK_CONTAINER_RUNNING" = true ] && printf '%s\n' running || printf '%s\n' exited ;;
                     *State.Running*) printf '%s\n' "$MOCK_CONTAINER_RUNNING" ;;
+                    *State.Paused*) cat "$MOCK_PAUSED_STATE" ;;
                     *Config.Image*) printf '%s\n' xream/sub-store:latest ;;
                     *HostConfig.LogConfig.Type*) printf '%s\n' "$MOCK_LOG_DRIVER" ;;
                     *LogPath*) printf '%s\n' "$MOCK_LOG_PATH" ;;
@@ -100,7 +115,11 @@ docker() {
         run) printf '%s\n' "$@" > "$DOCKER_ARGS"; printf '%s\n' mock-container ;;
         exec) return 0 ;;
         logs) cat "$MOCK_APP_LOGS" ;;
-        pause|unpause) ;;
+        pause)
+            printf '%s\n' true > "$MOCK_PAUSED_STATE"
+            [ "$MOCK_PAUSE_FAIL_AFTER" != 1 ]
+            ;;
+        unpause) printf '%s\n' false > "$MOCK_PAUSED_STATE" ;;
         stop) MOCK_CONTAINER_RUNNING=false; return 0 ;;
         start) MOCK_CONTAINER_RUNNING=true; return 0 ;;
         rm|rename) return 0 ;;
@@ -119,6 +138,9 @@ tar() {
         fi
     fi
     command tar "$@"
+    if [ "$MOCK_EXPORT_ATOMIC" = 1 ] && [ -n "$MOCK_EXPORT_TARGET" ]; then
+        [ "$(cat "$MOCK_EXPORT_TARGET")" = 'old successful-export target' ]
+    fi
 }
 
 cat > "$MOCK_APP_LOGS" <<'EOF'
@@ -236,15 +258,21 @@ if copy_directory_to_volume "$TEST_DIR" >/dev/null 2>&1; then
 fi
 MOCK_CONTAINER_RUNNING=true
 printf '%s\n' 'old successful-export target' > "$TEST_DIR/sub-store-data.tar.gz"
+MOCK_EXPORT_TARGET="$TEST_DIR/sub-store-data.tar.gz"
+MOCK_EXPORT_ATOMIC=1
 export_data "$TEST_DIR/sub-store-data.tar.gz" >/dev/null
+MOCK_EXPORT_ATOMIC=0
+MOCK_EXPORT_TARGET=""
 tar -tzf "$TEST_DIR/sub-store-data.tar.gz" | grep -Eq '(^|/)storage.json$'
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) ;;
     *) [ "$(stat -c '%a' "$TEST_DIR/sub-store-data.tar.gz")" = 600 ] ;;
 esac
 [ "$(cat "$TAR_MODE_CAPTURE")" = 600 ]
+[ "$(cat "$TAR_MODE_AT_CREATE_CAPTURE")" = 600 ]
 grep -Fxq 'pause sub-store' "$DOCKER_LOG"
 grep -Fxq 'unpause sub-store' "$DOCKER_LOG"
+grep -Fxq false "$MOCK_PAUSED_STATE"
 printf '%s\n' 'previous archive' > "$TEST_DIR/previous-backup.tar.gz"
 MOCK_TAR_FAIL=1
 if (export_data "$TEST_DIR/previous-backup.tar.gz") >/dev/null 2>&1; then
@@ -253,7 +281,18 @@ if (export_data "$TEST_DIR/previous-backup.tar.gz") >/dev/null 2>&1; then
 fi
 MOCK_TAR_FAIL=0
 grep -Fxq 'previous archive' "$TEST_DIR/previous-backup.tar.gz"
-[ "$(grep -c '^unpause sub-store$' "$DOCKER_LOG")" -ge 2 ]
+[ "$(cat "$MOCK_PAUSED_STATE")" = false ]
+[ -z "$(find "$TEST_DIR" -maxdepth 1 -name '.sub-store-export.*' -print -quit)" ]
+printf '%s\n' false > "$MOCK_PAUSED_STATE"
+printf '%s\n' 'old archive after pause error' > "$TEST_DIR/pause-failed.tar.gz"
+MOCK_PAUSE_FAIL_AFTER=1
+if (export_data "$TEST_DIR/pause-failed.tar.gz") >/dev/null 2>&1; then
+    echo 'An export unexpectedly succeeded after the Docker pause command failed.' >&2
+    exit 1
+fi
+MOCK_PAUSE_FAIL_AFTER=0
+grep -Fxq 'old archive after pause error' "$TEST_DIR/pause-failed.tar.gz"
+[ "$(cat "$MOCK_PAUSED_STATE")" = false ]
 [ -z "$(find "$TEST_DIR" -maxdepth 1 -name '.sub-store-export.*' -print -quit)" ]
 MOCK_CONTAINER=1
 HAD_OLD_CONTAINER=1

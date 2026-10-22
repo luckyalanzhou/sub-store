@@ -167,6 +167,7 @@ jobs:
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
             tests/install-log.sh \
+            tests/export-data.sh \
             tests/service-init.sh \
             tests/package-manager.sh \
             tests/plugin-install-rollback.sh \
@@ -199,6 +200,7 @@ jobs:
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
             tests/install-log.sh \
+            tests/export-data.sh \
             tests/service-init.sh \
             tests/package-manager.sh \
             tests/plugin-install-rollback.sh \
@@ -231,6 +233,7 @@ jobs:
           BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
           busybox ash tests/install-permissions.sh
           busybox ash tests/install-log.sh
+          BUSYBOX_TEST=1 busybox ash tests/export-data.sh
           busybox ash tests/service-init.sh
           busybox ash tests/package-manager.sh
           busybox ash tests/plugin-install-rollback.sh

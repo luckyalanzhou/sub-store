@@ -834,9 +834,19 @@ export_data() (
     [ -d "$target_dir" ] || fail "export destination directory does not exist: $target_dir"
     [ ! -d "$target" ] || fail "export destination must be a file, not a directory"
     case "$target" in "$VOLUME_PATH"|"$VOLUME_PATH"/*) fail "export destination cannot be inside the data volume" ;; esac
+    resolved_volume_path="$(cd -P "$VOLUME_PATH" 2>/dev/null && pwd -P)" || fail "could not resolve the data volume path"
+    resolved_target_dir="$(cd -P "$target_dir" 2>/dev/null && pwd -P)" || fail "could not resolve the export destination directory"
+    case "$resolved_target_dir" in
+        "$resolved_volume_path"|"$resolved_volume_path"/*) fail "export destination cannot be inside the data volume" ;;
+    esac
+    if [ "$resolved_target_dir" = "/" ]; then
+        resolved_target="/${target##*/}"
+    else
+        resolved_target="$resolved_target_dir/${target##*/}"
+    fi
 
     umask 077
-    temp_file="$(mktemp "$target_dir/.sub-store-export.XXXXXX")" || fail "could not create a private temporary export file"
+    temp_file="$(mktemp "$resolved_target_dir/.sub-store-export.XXXXXX")" || fail "could not create a private temporary export file"
     chmod 600 "$temp_file" || {
         rm -f "$temp_file"
         fail "could not secure the temporary export file"
@@ -844,7 +854,10 @@ export_data() (
     paused=0
     cleanup_export() {
         if [ "$paused" = "1" ]; then
-            if docker unpause sub-store >/dev/null; then
+            paused_state="$(docker inspect -f '{{.State.Paused}}' sub-store 2>/dev/null || true)"
+            if [ "$paused_state" = "false" ]; then
+                paused=0
+            elif docker unpause sub-store >/dev/null; then
                 paused=0
             else
                 echo "WARNING: Export cleanup could not unpause sub-store. Start it manually." >&2
@@ -858,10 +871,7 @@ export_data() (
     trap 'exit 143' TERM
     if docker inspect -f '{{.State.Running}}' sub-store 2>/dev/null | grep -qx true; then
         paused=1
-        docker pause sub-store >/dev/null || {
-            paused=0
-            fail "could not pause sub-store for a consistent export"
-        }
+        docker pause sub-store >/dev/null || fail "could not pause sub-store for a consistent export"
     fi
     result=0
     tar -czf "$temp_file" -C "$VOLUME_PATH" . || result=$?
@@ -873,12 +883,12 @@ export_data() (
         [ "$result" -ne 0 ] || paused=0
     fi
     if [ "$result" -eq 0 ]; then
-        mv -f "$temp_file" "$target" || result=$?
+        mv -f "$temp_file" "$resolved_target" || result=$?
     fi
     [ "$result" -eq 0 ] || fail "could not export sub-store data"
     temp_file=""
     echo "Exported sub-store data to $target"
-    command -v sha256sum >/dev/null 2>&1 && sha256sum "$target" || true
+    command -v sha256sum >/dev/null 2>&1 && sha256sum "$resolved_target" || true
 )
 
 uninstall_plugin() {

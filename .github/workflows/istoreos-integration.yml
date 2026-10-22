@@ -1,0 +1,41 @@
+name: Test installer on iStoreOS
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: iStoreOS ${{ matrix.release }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release: 24.10.8-2026073111
+            ssh_port: 2222
+          - release: 25.12.5-2026092410
+            ssh_port: 2223
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install QEMU and SSH tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends makeself qemu-system-x86 python3-pexpect openssh-client
+
+      - name: Build test installer
+        run: |
+          for version in 0.0.1 0.0.2 0.0.3; do
+            VERSION="$version" sh scripts/build-run.sh
+          done
+
+      - name: Install and update on real iStoreOS firmware
+        run: python3 tests/istoreos-qemu.py
+        env:
+          ISTOREOS_RELEASE: ${{ matrix.release }}
+          ISTOREOS_SSH_PORT: ${{ matrix.ssh_port }}

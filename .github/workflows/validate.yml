@@ -24,6 +24,9 @@ jobs:
       - name: Run Python regression tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
 
+      - name: Check QEMU integration test syntax
+        run: python3 -c "import ast, pathlib; ast.parse(pathlib.Path('tests/istoreos-qemu.py').read_text())"
+
       - name: Check shell syntax and run shell regressions
         shell: bash
         run: |
@@ -40,6 +43,7 @@ jobs:
             run/payload/root/usr/lib/sub-store/permissions.sh \
             tests/install-permissions.sh \
             tests/install-log.sh \
+            tests/export-data.sh \
             tests/service-init.sh \
             tests/package-manager.sh \
             tests/plugin-install-rollback.sh \
@@ -75,6 +79,8 @@ jobs:
           busybox ash tests/install-permissions.sh
           echo 'Running BusyBox regression: install-log'
           busybox ash tests/install-log.sh
+          echo 'Running BusyBox regression: export-data'
+          BUSYBOX_TEST=1 busybox ash tests/export-data.sh
           echo 'Running BusyBox regression: service-init'
           busybox ash tests/service-init.sh
           echo 'Running BusyBox regression: package-manager'
