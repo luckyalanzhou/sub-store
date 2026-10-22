@@ -5,8 +5,8 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 REAL_MKTEMP="$(which mktemp)"
-REAL_TAR="$(command -v tar)"
-REAL_MV="$(command -v mv)"
+REAL_TAR="$(which tar)"
+REAL_MV="$(which mv)"
 BIN="$TEST_DIR/bin"
 MOCK_VOLUME_PATH="$TEST_DIR/data-volume"
 MOCK_PAUSED_STATE="$TEST_DIR/container-paused"
@@ -31,9 +31,19 @@ sed \
     -e "s|/lib/functions.sh|$TEST_DIR/openwrt-functions.sh|g" \
     -e "s|/usr/lib/sub-store/cron.sh|$ROOT/run/payload/root/usr/lib/sub-store/cron.sh|g" \
     -e "s|temp_file=\"[\$][(]mktemp |temp_file=\"\$($BIN/mktemp |" \
+    -e "s|    tar -czf |    $BIN/tar -czf |" \
+    -e "s|        mv -f |        $BIN/mv -f |" \
     "$ROOT/run/payload/root/usr/bin/sub-storectl" > "$TEST_DIR/sub-storectl"
 grep -Fq "temp_file=\"\$($BIN/mktemp " "$TEST_DIR/sub-storectl" || {
     echo 'Could not inject the temporary-file permission mock.' >&2
+    exit 1
+}
+grep -Fq "$BIN/tar -czf " "$TEST_DIR/sub-storectl" || {
+    echo 'Could not inject the archive creation mock.' >&2
+    exit 1
+}
+grep -Fq "$BIN/mv -f " "$TEST_DIR/sub-storectl" || {
+    echo 'Could not inject the atomic replacement mock.' >&2
     exit 1
 }
 
