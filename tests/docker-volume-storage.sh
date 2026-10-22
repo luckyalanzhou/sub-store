@@ -34,6 +34,9 @@ MOCK_APP_LOGS="$TEST_DIR/app.log"
 MOCK_LOG_DRIVER=json-file
 MOCK_LOG_PATH="$TEST_DIR/sub-store-runtime.log"
 MOCK_REPO_DIGEST=""
+TAR_MODE_CAPTURE="$TEST_DIR/tar-mode"
+MOCK_TAR_FAIL=0
+REAL_TAR="$(command -v tar)"
 
 uci() {
     case "$*" in
@@ -98,11 +101,25 @@ docker() {
         run) printf '%s\n' "$@" > "$DOCKER_ARGS"; printf '%s\n' mock-container ;;
         exec) return 0 ;;
         logs) cat "$MOCK_APP_LOGS" ;;
+        pause|unpause) ;;
         stop) MOCK_CONTAINER_RUNNING=false; return 0 ;;
         start) MOCK_CONTAINER_RUNNING=true; return 0 ;;
         rm|rename) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+tar() {
+    if [ "${1:-}" = "-czf" ]; then
+        mode="missing"
+        [ ! -e "$2" ] || mode="$(stat -c '%a' "$2")"
+        printf '%s\n' "$mode" > "$TAR_MODE_CAPTURE"
+        if [ "$MOCK_TAR_FAIL" = "1" ]; then
+            printf '%s\n' 'partial archive' > "$2"
+            return 2
+        fi
+    fi
+    "$REAL_TAR" "$@"
 }
 
 cat > "$MOCK_APP_LOGS" <<'EOF'
@@ -111,6 +128,7 @@ startup output
 Sub-Store -- v2.42.4
 EOF
 [ "$(show_app_version)" = "2.42.4" ]
+grep -Fxq 'logs --tail 100 sub-store' "$DOCKER_LOG"
 MOCK_REPO_DIGEST="xream/sub-store@sha256:$(printf 'a%.0s' $(seq 1 64))"
 [ "$(resolve_official_digest xream/sub-store:latest)" = "$MOCK_REPO_DIGEST" ]
 assert_official_image_ref "$MOCK_REPO_DIGEST"
@@ -217,12 +235,27 @@ if copy_directory_to_volume "$TEST_DIR" >/dev/null 2>&1; then
     echo 'Migration accepted a source containing the Docker volume.' >&2
     exit 1
 fi
+MOCK_CONTAINER_RUNNING=true
+printf '%s\n' 'old successful-export target' > "$TEST_DIR/sub-store-data.tar.gz"
 export_data "$TEST_DIR/sub-store-data.tar.gz" >/dev/null
 tar -tzf "$TEST_DIR/sub-store-data.tar.gz" | grep -Eq '(^|/)storage.json$'
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) ;;
     *) [ "$(stat -c '%a' "$TEST_DIR/sub-store-data.tar.gz")" = 600 ] ;;
 esac
+[ "$(cat "$TAR_MODE_CAPTURE")" = 600 ]
+grep -Fxq 'pause sub-store' "$DOCKER_LOG"
+grep -Fxq 'unpause sub-store' "$DOCKER_LOG"
+printf '%s\n' 'previous archive' > "$TEST_DIR/previous-backup.tar.gz"
+MOCK_TAR_FAIL=1
+if (export_data "$TEST_DIR/previous-backup.tar.gz") >/dev/null 2>&1; then
+    echo 'A failed export unexpectedly succeeded.' >&2
+    exit 1
+fi
+MOCK_TAR_FAIL=0
+grep -Fxq 'previous archive' "$TEST_DIR/previous-backup.tar.gz"
+[ "$(grep -c '^unpause sub-store$' "$DOCKER_LOG")" -ge 2 ]
+[ -z "$(find "$TEST_DIR" -maxdepth 1 -name '.sub-store-export.*' -print -quit)" ]
 MOCK_CONTAINER=1
 HAD_OLD_CONTAINER=1
 BACKUP_NAME=sub-store-test-rollback

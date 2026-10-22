@@ -309,7 +309,7 @@ for cleanup_case in unused dangling shared tagged inspect-failed current-inspect
         case "$CLEANUP_CASE" in
             unused|dangling|single)
                 [ -f "$TEST_DIR/image-removed" ]
-                grep -Fxq "image rm --no-prune $OLD_IMAGE_ID" "$TEST_DIR/docker.log"
+                grep -Fxq "image rm $OLD_IMAGE_ID" "$TEST_DIR/docker.log"
                 backup_line="$(grep -n '^rm sub-store-rollback-' "$TEST_DIR/docker.log" | cut -d: -f1)"
                 image_line="$(grep -n '^image rm ' "$TEST_DIR/docker.log" | cut -d: -f1)"
                 [ "$backup_line" -lt "$image_line" ]

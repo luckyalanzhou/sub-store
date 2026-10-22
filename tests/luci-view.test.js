@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const source = fs.readFileSync('run/payload/root/www/luci-static/resources/view/sub-store/manage.js', 'utf8');
 function setup() {
     const options = {}, calls = [], polls = [];
+    let logTabMenu = null;
     const rootLogTab = { textContent: '日志', clicks: 0, click() { this.clicks += 1; } };
     const state = { container: 'running', health: 'healthy', url: 'http://router.test:3001/?api=x', busy: false, version: 'test',
         app_version: '2.42.3', created: '2026-10-13T00:00:00Z', output: 'maintenance log', container_log: 'runtime log',
@@ -15,7 +16,29 @@ function setup() {
             throw new TypeError('event.currentTarget is required');
         return fn.apply(ctx, args);
     }, changes: { init: async () => {}, apply: async () => { calls.push(['apply']); } },
-        tabs: { initTabGroup: panes => calls.push(['tabs', panes]) },
+        tabs: { initTabGroup: panes => {
+            calls.push(['tabs', panes]);
+            const items = panes.map(pane => E('li', {
+                'data-tab': pane['data-tab'],
+                class: pane['data-tab-active'] === 'true' ? 'cbi-tab' : 'cbi-tab-disabled'
+            }, [E('a', { click: () => {
+                panes.forEach(candidate => {
+                    const active = candidate === pane;
+                    candidate.hidden = !active;
+                    candidate.setAttribute('data-tab-active', active ? 'true' : 'false');
+                });
+                items.forEach(item => {
+                    item.class = item === items[panes.indexOf(pane)] ? 'cbi-tab' : 'cbi-tab-disabled';
+                });
+            } }, [pane['data-tab-title']])]));
+            logTabMenu = E('ul', { class: 'cbi-tabmenu' }, items);
+            logTabMenu.querySelector = selector => {
+                const match = selector.match(/\[data-tab="([^"]+)"\]/);
+                const item = match && items.find(candidate => candidate['data-tab'] === match[1]);
+                return item && item.children[0];
+            };
+            panes.forEach(pane => { pane.hidden = pane['data-tab-active'] !== 'true'; });
+        } },
         addNotification: (...args) => calls.push(['notice', ...args]), showModal: (...args) => calls.push(['modal', ...args]), hideModal() {} };
     const uci = { load: async () => {}, unload() {} };
     const backend = { exec: async (path, args) => {
@@ -47,6 +70,7 @@ function setup() {
         async render() {
             const form = E('form');
             form.querySelectorAll = () => [rootLogTab];
+            form.querySelector = selector => selector === '#cbi-sub-store-main-_logs .cbi-tabmenu' ? logTabMenu : null;
             return form;
         }
         async save() { calls.push(['save']); }
@@ -130,19 +154,19 @@ test('native page groups settings, masks key and schedules status polling', asyn
     assert.equal(t.view.clearLogButtons.container.children[0], '清空日志');
     assert.equal(t.view.clearLogButtons.operation.children[0], '清空日志');
     assert.deepEqual(t.view.logTabMenu.children.map(item => item.children[0].children[0]), ['运行日志', '维护日志']);
-    assert.equal(t.view.logTabMenu.style, 'display:flex;flex-wrap:wrap;width:100%;margin:0;padding:0');
-    assert.ok(t.view.logTabMenu.children.every(item => item.style === 'display:inline-flex;flex:0 0 auto;width:auto'));
-    assert.ok(t.view.logTabMenu.children.every(item => item.children[0].style === 'display:inline-flex;width:auto;white-space:nowrap'));
+    assert.equal(t.view.logTabMenu.class, 'cbi-tabmenu');
+    assert.ok(t.view.logTabMenu.children.every(item => item.style === undefined && item.children[0].style === undefined));
+    assert.equal(t.calls.some(call => call[0] === 'tabs' && call[1] === t.view.logPanes), true);
     assert.equal(t.options._logs.renderWidget().children[0], t.view.logPanes[0]);
     assert.equal(t.view.logPanes[0].children[0], t.view.clearLogButtons.container);
     assert.equal(t.view.logPanes[1].children[0], t.view.clearLogButtons.operation);
-    assert.equal(t.view.logPanes[0].hidden, undefined);
+    assert.equal(t.view.logPanes[0].hidden, false);
     assert.equal(t.view.logPanes[1].hidden, true);
-    t.view.logTabItems[1].children[0].click({ preventDefault() {} });
+    t.view.logTabMenu.children[1].children[0].click({ preventDefault() {} });
     assert.equal(t.view.logPanes[0].hidden, true);
     assert.equal(t.view.logPanes[1].hidden, false);
-    assert.equal(t.view.logTabItems[1].className, 'cbi-tab');
-    assert.equal(t.view.logTabItems[1].children[0]['aria-selected'], 'true');
+    assert.equal(t.view.logTabMenu.children[1].class, 'cbi-tab');
+    assert.equal(t.view.logPanes[1]['data-tab-active'], 'true');
     assert.doesNotMatch(source, /刷新日志/);
     t.state.container_log = 'refreshed runtime log';
     t.state.output = 'refreshed maintenance log';
@@ -317,7 +341,8 @@ test('checking updates opens the maintenance log tab automatically', async () =>
     assert.equal(t.rootLogTab.clicks, 1);
     assert.equal(t.view.logPanes[0].hidden, true);
     assert.equal(t.view.logPanes[1].hidden, false);
-    assert.equal(t.view.logTabItems[1].children[0]['aria-selected'], 'true');
+    assert.equal(t.view.logTabMenu.children[1].class, 'cbi-tab');
+    assert.equal(t.view.logPanes[1]['data-tab-active'], 'true');
     await t.view.enqueueTask;
 });
 test('XHR timeout is quiet when polling confirms the queued task', async () => {

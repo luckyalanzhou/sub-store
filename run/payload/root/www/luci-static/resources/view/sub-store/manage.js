@@ -229,17 +229,10 @@ return view.extend({
             this.paintLog();
         } catch (error) {}
     },
-    selectLogTab: function(index) {
-        this.logPanes.forEach((node, paneIndex) => {
-            node.hidden = paneIndex !== index;
-            const tab = this.logTabItems[paneIndex];
-            tab.className = paneIndex === index ? 'cbi-tab' : 'cbi-tab-disabled';
-            tab.children[0].setAttribute('aria-selected', paneIndex === index ? 'true' : 'false');
-        });
-    },
     showMaintenanceLogs: function() {
         if (this.logsPageTab) this.logsPageTab.click();
-        this.selectLogTab(1);
+        const maintenanceTab = this.logTabMenu && this.logTabMenu.querySelector('[data-tab="operation"] a');
+        if (maintenanceTab) maintenanceTab.click();
     },
     run: async function(action) {
         if (this.localBusy || (this.state && this.state.busy)) throw new Error('已有操作正在执行，请等待完成。');
@@ -429,27 +422,13 @@ return view.extend({
         };
         const runtimeLogs = logSection('container', '运行日志', 'clear-runtime-logs');
         const maintenanceLogs = logSection('operation', '维护日志', 'clear-maintenance-logs');
+        runtimeLogs.setAttribute('data-tab', 'container');
+        runtimeLogs.setAttribute('data-tab-title', '运行日志');
+        runtimeLogs.setAttribute('data-tab-active', 'true');
+        maintenanceLogs.setAttribute('data-tab', 'operation');
+        maintenanceLogs.setAttribute('data-tab-title', '维护日志');
+        maintenanceLogs.setAttribute('data-tab-active', 'false');
         this.logPanes = [runtimeLogs, maintenanceLogs];
-        this.logTabItems = [];
-        const logTabMenu = E('ul', { 'class': 'cbi-tabmenu', role: 'tablist',
-            style: 'display:flex;flex-wrap:wrap;width:100%;margin:0;padding:0' }, [
-            ...['运行日志', '维护日志'].map((label, index) => {
-                const pane = this.logPanes[index];
-                if (index) pane.hidden = true;
-                const item = E('li', { 'class': index ? 'cbi-tab-disabled' : 'cbi-tab',
-                    style: 'display:inline-flex;flex:0 0 auto;width:auto' }, [
-                    E('a', { href: '#', role: 'tab', 'aria-selected': index ? 'false' : 'true',
-                        style: 'display:inline-flex;width:auto;white-space:nowrap',
-                        click: ev => {
-                            ev.preventDefault();
-                            this.selectLogTab(index);
-                        } }, [label])
-                ]);
-                this.logTabItems.push(item);
-                return item;
-            })
-        ]);
-        this.logTabMenu = logTabMenu;
         const logsPanel = E('div', {}, this.logPanes);
         display('logs', '_logs', '', logsPanel);
         const rotate = E('button', { type: 'button', 'class': 'cbi-button cbi-button-negative',
@@ -465,10 +444,10 @@ return view.extend({
         ]));
         display('maintenance', '_rotate', 'API 密钥', rotate);
         const formNode = await m.render();
+        ui.tabs.initTabGroup(this.logPanes);
+        this.logTabMenu = formNode.querySelector && formNode.querySelector('#cbi-sub-store-main-_logs .cbi-tabmenu');
         const pageTabs = formNode.querySelectorAll && formNode.querySelectorAll('.cbi-tabmenu a');
         this.logsPageTab = pageTabs && Array.from(pageTabs).find(tab => tab.textContent.trim() === '日志');
-        const logTitle = formNode.querySelector && formNode.querySelector('#cbi-sub-store-main-_logs .cbi-value-title');
-        if (logTitle) logTitle.replaceWith(E('div', { 'class': 'cbi-value-title' }, [logTabMenu]));
         this.paint();
         this.pollCycle = 0;
         poll.add(async () => {

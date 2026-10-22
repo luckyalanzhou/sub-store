@@ -169,19 +169,19 @@ if ! detect_package_manager; then
     fail "This installer requires iStoreOS/OpenWrt with opkg or apk."
 fi
 
-if ! command -v jsonfilter >/dev/null 2>&1; then
-    say "Installing required jsonfilter package..."
-    package_manager_update || fail "Could not refresh package feeds to install jsonfilter."
-    package_manager_install jsonfilter || fail "Could not install jsonfilter from the configured package feeds."
-    command -v jsonfilter >/dev/null 2>&1 || fail "jsonfilter is still unavailable after package installation."
-fi
-
 if [ "$PLUGIN_ONLY" = "1" ]; then
     [ -f /www/luci-static/resources/form.js ] || fail "LuCI is unavailable; reinstall the full package."
     command -v lua >/dev/null 2>&1 || fail "Lua is unavailable; reinstall the full package."
     lua -e 'require "luci.sys"; require "luci.jsonc"' >/dev/null 2>&1 ||
         fail "LuCI status dependencies are unavailable; reinstall the full package."
 else
+    if ! command -v jsonfilter >/dev/null 2>&1; then
+        say "Installing required jsonfilter package..."
+        package_manager_update || fail "Could not refresh package feeds to install jsonfilter."
+        package_manager_install jsonfilter || fail "Could not install jsonfilter from the configured package feeds."
+        command -v jsonfilter >/dev/null 2>&1 || fail "jsonfilter is still unavailable after package installation."
+    fi
+
     if ! command -v docker >/dev/null 2>&1; then
         say "Installing Docker from the configured $PACKAGE_MANAGER feeds..."
         package_manager_update || fail "Could not refresh package feeds to install Docker."

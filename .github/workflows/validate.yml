@@ -1,0 +1,84 @@
+name: Validate Sub-Store source
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Run source checks (no package or release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lua5.1 busybox-static
+
+      - name: Run Python regression tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Check shell syntax and run shell regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in \
+            scripts/build-run.sh \
+            run/payload/install.sh \
+            run/payload/lib/package-manager.sh \
+            run/payload/root/etc/init.d/sub-store \
+            run/payload/root/usr/bin/sub-storectl \
+            run/payload/root/usr/lib/sub-store/cron.sh \
+            run/payload/root/usr/lib/sub-store/job.sh \
+            run/payload/root/usr/lib/sub-store/plugin-update \
+            run/payload/root/usr/lib/sub-store/permissions.sh \
+            tests/install-permissions.sh \
+            tests/service-init.sh \
+            tests/package-manager.sh \
+            tests/plugin-install-rollback.sh \
+            tests/operation-feedback.sh \
+            tests/cron-validation.sh \
+            tests/docker-volume-storage.sh \
+            tests/image-update.sh \
+            tests/plugin-update.sh; do
+            sh -n "$script"
+            if grep -q $'\r' "$script"; then
+              echo "CRLF line endings are not allowed in shell script: $script" >&2
+              exit 1
+            fi
+            busybox ash -n "$script"
+          done
+
+          awk_bin="$(mktemp -d)"
+          trap 'rm -rf "$awk_bin"' EXIT
+          cat > "$awk_bin/awk" <<'EOF'
+          #!/bin/sh
+          exec busybox awk "$@"
+          EOF
+          chmod +x "$awk_bin/awk"
+          PATH="$awk_bin:$PATH" busybox ash tests/cron-validation.sh
+          busybox ash tests/docker-volume-storage.sh
+          busybox ash tests/image-update.sh
+          BUSYBOX_TEST=1 busybox ash tests/operation-feedback.sh
+          busybox ash tests/install-permissions.sh
+          busybox ash tests/service-init.sh
+          busybox ash tests/package-manager.sh
+          busybox ash tests/plugin-install-rollback.sh
+          busybox ash tests/plugin-update.sh
+
+      - name: Check LuCI and health behavior
+        run: |
+          set -euo pipefail
+          luac5.1 -p run/payload/root/usr/lib/sub-store/status tests/luci-status.lua
+          lua5.1 tests/luci-status.lua .
+          node --check run/payload/root/www/luci-static/resources/view/sub-store/manage.js
+          node --test tests/luci-view.test.js
+          node --check run/payload/root/usr/lib/sub-store/healthcheck.js
+          node --check run/payload/root/usr/lib/sub-store/app-version.js
+          node --test tests/frontend-health.test.js
