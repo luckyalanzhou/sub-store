@@ -115,9 +115,22 @@ if (PATH="$TMP/bin:$PATH" OPKG_LOG="$TMP/opkg.log" sh "$TMP/package/install.sh")
     echo 'The installer entry accepted an active LuCI operation.' >&2
     exit 1
 fi
-[ "$(cat "$TMP/entry-state/lock/pid")" = "$$" ]
-[ ! -e "$TMP/opkg.log" ]
-grep -q 'Another sub-store operation is running' "$TMP/entry-active-output"
+if [ "$(cat "$TMP/entry-state/lock/pid")" != "$$" ]; then
+    echo 'Active installer entry changed the existing lock owner:' >&2
+    cat "$TMP/entry-active-output" >&2
+    exit 1
+fi
+if [ -e "$TMP/opkg.log" ]; then
+    echo 'Active installer entry proceeded to package operations:' >&2
+    cat "$TMP/entry-active-output" >&2
+    cat "$TMP/opkg.log" >&2
+    exit 1
+fi
+if ! grep -q 'Another sub-store operation is running' "$TMP/entry-active-output"; then
+    echo 'Active installer entry failed for an unexpected reason:' >&2
+    cat "$TMP/entry-active-output" >&2
+    exit 1
+fi
 
 echo 'Installer operation lock: active-operation rejection passed.'
 
