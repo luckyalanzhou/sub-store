@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import http.server
 import os
@@ -181,7 +180,7 @@ def serial_command(child: pexpect.spawn, command: str, timeout: int = 60) -> Non
 
 def provision_guest(child: pexpect.spawn, public_key: bytes) -> None:
     wait_for_serial_prompt(child, BOOT_TIMEOUT_SECONDS)
-    key_b64 = base64.b64encode(public_key).decode("ascii")
+    public_key_line = public_key.decode("ascii").strip()
     serial_command(
         child,
         "interface=$(ip -o link show | awk -F': ' '$2 !~ /^lo(@|$)/ "
@@ -196,7 +195,7 @@ def provision_guest(child: pexpect.spawn, public_key: bytes) -> None:
     serial_command(
         child,
         "mkdir -p /root/.ssh && "
-        f"printf '%s' '{key_b64}' | base64 -d > /root/.ssh/authorized_keys && "
+        f"printf '%s\\n' '{public_key_line}' > /root/.ssh/authorized_keys && "
         "chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys && "
         "/etc/init.d/dropbear enable && /etc/init.d/dropbear restart",
     )
