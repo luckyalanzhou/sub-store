@@ -3,6 +3,7 @@ set -eu
 
 PACKAGE_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 . "$PACKAGE_DIR/lib/package-manager.sh"
+. "$PACKAGE_DIR/lib/install-log.sh"
 LOG=/tmp/sub-store-run-install.log
 LOG_MAX_BYTES=1048576
 INSTALL_STEP="准备安装"
@@ -12,8 +13,10 @@ PLUGIN_UPDATE_ACTIVE=0
 PLUGIN_TARGET_PREFIX=""
 FULL_INSTALL_ACTIVE=0
 SERVICE_WAS_ENABLED=0
-: > "$LOG"
-chmod 600 "$LOG"
+initialize_install_log "$LOG" || {
+    echo "Could not safely initialize the installer log at $LOG." >&2
+    exit 1
+}
 PACKAGE_VERSION=dev
 if [ -r "$PACKAGE_DIR/build-version" ]; then
     PACKAGE_VERSION="$(cat "$PACKAGE_DIR/build-version")"
