@@ -36,7 +36,6 @@ MOCK_LOG_PATH="$TEST_DIR/sub-store-runtime.log"
 MOCK_REPO_DIGEST=""
 TAR_MODE_CAPTURE="$TEST_DIR/tar-mode"
 MOCK_TAR_FAIL=0
-REAL_TAR="$(command -v tar)"
 
 uci() {
     case "$*" in
@@ -119,7 +118,7 @@ tar() {
             return 2
         fi
     fi
-    "$REAL_TAR" "$@"
+    command tar "$@"
 }
 
 cat > "$MOCK_APP_LOGS" <<'EOF'

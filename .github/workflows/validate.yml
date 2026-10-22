@@ -65,7 +65,7 @@ jobs:
           echo 'Running BusyBox regression: cron-validation'
           PATH="$awk_bin:$PATH" busybox ash tests/cron-validation.sh
           echo 'Running BusyBox regression: docker-volume-storage'
-          busybox ash -x tests/docker-volume-storage.sh
+          busybox ash tests/docker-volume-storage.sh
           echo 'Running BusyBox regression: image-update'
           busybox ash tests/image-update.sh
           echo 'Running BusyBox regression: operation-feedback'
