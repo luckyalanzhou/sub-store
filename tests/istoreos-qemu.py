@@ -40,6 +40,7 @@ HOST_ADDRESS = "192.168.100.2"
 GUEST_ADDRESS = "192.168.100.15"
 HTTP_PORT = 18765
 QEMU_MEMORY_MB = 2048
+DOCKER_DISK_SIZE_GIB = 8
 BOOT_TIMEOUT_SECONDS = 600
 INSTALL_TIMEOUT_SECONDS = 1800
 
@@ -222,6 +223,10 @@ def main() -> None:
         temp = pathlib.Path(temporary_directory)
         disk_path = temp / "istoreos.img"
         download_firmware(temp, image_name, expected_sha256)
+        docker_disk_path = temp / "docker-data.img"
+        with docker_disk_path.open("wb") as docker_disk:
+            docker_disk.truncate(DOCKER_DISK_SIZE_GIB * 1024 * 1024 * 1024)
+        subprocess.run(["mkfs.ext4", "-F", "-m", "0", str(docker_disk_path)], check=True)
         key_path = temp / "id_ed25519"
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key_path)], check=True)
         public_key = key_path.with_suffix(".pub").read_bytes()
@@ -244,6 +249,7 @@ def main() -> None:
                 "-m", str(QEMU_MEMORY_MB),
                 "-smp", "2",
                 "-drive", f"file={disk_path},format=raw,if=virtio",
+                "-drive", f"file={docker_disk_path},format=raw,if=virtio",
                 "-netdev", f"user,id=lan,net=192.168.100.0/24,host={HOST_ADDRESS},dns=192.168.100.3,hostfwd=tcp:127.0.0.1:{ssh_port}-{GUEST_ADDRESS}:22",
                 "-device", "virtio-net-pci,netdev=lan",
                 "-display", "none",
@@ -268,6 +274,17 @@ def main() -> None:
             )
             if package_manager != expected_manager:
                 raise RuntimeError(f"Expected {expected_manager}, guest selected {package_manager}.")
+
+            ssh_command(
+                ssh_port,
+                key_path,
+                "set -e; docker_root=$(docker info --format '{{.DockerRootDir}}'); "
+                "/etc/init.d/dockerd stop; mkdir -p \"$docker_root\"; "
+                "mount -t ext4 /dev/vdb \"$docker_root\"; "
+                "/etc/init.d/dockerd start; "
+                "for attempt in $(seq 1 30); do docker info >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1",
+                timeout=120,
+            )
 
             ssh_command(
                 ssh_port,

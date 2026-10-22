@@ -26,7 +26,7 @@ jobs:
       - name: Install QEMU and SSH tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends makeself qemu-system-x86 python3-pexpect openssh-client
+          sudo apt-get install -y --no-install-recommends e2fsprogs makeself qemu-system-x86 python3-pexpect openssh-client
 
       - name: Build test installer
         run: |
