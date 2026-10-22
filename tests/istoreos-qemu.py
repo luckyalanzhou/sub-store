@@ -141,7 +141,7 @@ def ssh_command(
         timeout=timeout,
         check=False,
     )
-    if show_output and result.stdout:
+    if (show_output or result.returncode != 0) and result.stdout:
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
     if result.returncode != 0:
         raise RuntimeError(f"Guest command failed with exit code {result.returncode}: {command}")
