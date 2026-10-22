@@ -278,9 +278,8 @@ def main() -> None:
             ssh_command(
                 ssh_port,
                 key_path,
-                "set -e; /etc/init.d/dockerd stop >/dev/null 2>&1 || true; "
-                "mkdir -p /opt/docker; mount -t ext4 /dev/vdb /opt/docker; "
-                "/etc/init.d/dockerd start; "
+                "set -e; mkdir -p /opt/docker; mount -t ext4 /dev/vdb /opt/docker; "
+                "test \"$(df -Pk /opt/docker | tail -n 1 | awk '{print $4}')\" -gt 1048576; "
                 "for attempt in $(seq 1 30); do docker info >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1",
                 timeout=120,
             )
