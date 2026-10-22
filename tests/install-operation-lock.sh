@@ -90,7 +90,8 @@ sed -e "s|INSTALL_OPERATION_STATE=/tmp/sub-store-operation|INSTALL_OPERATION_STA
     -e "s|directory:0:700|$ENTRY_STATE_INFO|" \
     "$TMP/package/lib/install-lock.sh" > "$TMP/install-lock.sh"
 mv "$TMP/install-lock.sh" "$TMP/package/lib/install-lock.sh"
-sed "s|LOG=/tmp/sub-store-run-install.log|LOG=$TMP/installer.log|" \
+sed -e "s|LOG=/tmp/sub-store-run-install.log|LOG=$TMP/installer.log|" \
+    -e 's|^.*Run the .run installer as root.*$|:|' \
     "$INSTALLER" > "$TMP/package/install.sh"
 cat > "$TMP/bin/id" <<'EOF'
 #!/bin/sh
