@@ -4,7 +4,7 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEST_DIR"' EXIT
-REAL_MKTEMP="$(command -v mktemp)"
+REAL_MKTEMP="$(which mktemp)"
 REAL_TAR="$(command -v tar)"
 REAL_MV="$(command -v mv)"
 BIN="$TEST_DIR/bin"
@@ -30,7 +30,12 @@ sed \
     -e "s|/etc/config/sub-store|$TEST_DIR/config|g" \
     -e "s|/lib/functions.sh|$TEST_DIR/openwrt-functions.sh|g" \
     -e "s|/usr/lib/sub-store/cron.sh|$ROOT/run/payload/root/usr/lib/sub-store/cron.sh|g" \
+    -e "s|temp_file=\"[\$][(]mktemp |temp_file=\"\$($BIN/mktemp |" \
     "$ROOT/run/payload/root/usr/bin/sub-storectl" > "$TEST_DIR/sub-storectl"
+grep -Fq "temp_file=\"\$($BIN/mktemp " "$TEST_DIR/sub-storectl" || {
+    echo 'Could not inject the temporary-file permission mock.' >&2
+    exit 1
+}
 
 cat > "$BIN/docker" <<'EOF'
 #!/bin/sh
@@ -57,7 +62,6 @@ if [ "${MOCK_EXPORT_RACE:-0}" = 1 ]; then
     ln -s "$MOCK_VOLUME_PATH" "$MOCK_EXPORT_LINK"
 fi
 created_file="$("$REAL_MKTEMP" "$@")" || exit
-printf '%s\n' "[DEBUG-export-mktemp] real=$REAL_MKTEMP args=$* capture=${TAR_MODE_AT_CREATE_CAPTURE:-<unset>}" >&2
 stat -c '%a' "$created_file" > "$TAR_MODE_AT_CREATE_CAPTURE"
 printf '%s\n' "$created_file"
 EOF
@@ -105,9 +109,6 @@ chmod +x "$BIN/docker" "$BIN/mktemp" "$BIN/tar" "$BIN/mv"
 
 run_export() {
     export PATH="$BIN:$PATH"
-    if [ ! -e "$TAR_MODE_AT_CREATE_CAPTURE" ]; then
-        printf '%s\n' "[DEBUG-export-path] mktemp=$(command -v mktemp) bin=$BIN" >&2
-    fi
     export REAL_MKTEMP REAL_TAR REAL_MV MOCK_VOLUME_PATH MOCK_PAUSED_STATE
     export DOCKER_LOG TAR_MODE_AT_CREATE_CAPTURE EXPORT_TARGET
     export EXPORT_OLD_CONTENT MOCK_TAR_FAIL MOCK_PAUSE_FAIL MOCK_MV_FAIL
