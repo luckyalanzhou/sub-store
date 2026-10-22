@@ -184,8 +184,11 @@ def provision_guest(child: pexpect.spawn, public_key: bytes) -> None:
     key_b64 = base64.b64encode(public_key).decode("ascii")
     serial_command(
         child,
-        "ip link set br-lan up && ip addr flush dev br-lan && "
-        f"ip addr add {GUEST_ADDRESS}/24 dev br-lan && "
+        "interface=$(ip -o link show | awk -F': ' '$2 !~ /^lo(@|$)/ "
+        "{ sub(/@.*/, \"\", $2); print $2; exit }') && "
+        "[ -n \"$interface\" ] && ip link set \"$interface\" up && "
+        "ip addr flush dev \"$interface\" && "
+        f"ip addr add {GUEST_ADDRESS}/24 dev \"$interface\" && "
         f"ip route replace default via {HOST_ADDRESS} && "
         f"printf 'nameserver 192.168.100.3\\n' > /tmp/resolv.conf && "
         "ln -sf /tmp/resolv.conf /etc/resolv.conf",
